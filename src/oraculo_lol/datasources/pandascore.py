@@ -42,14 +42,11 @@ class PandascoreClient:
                 with httpx.Client(timeout=self.timeout_s, headers=self._headers()) as client:
                     resp = client.get(url, params=params)
 
-                # Rate limit / transient errors
                 if resp.status_code in (429, 500, 502, 503, 504):
                     wait = min(2**attempt, 30)
                     logger.warning(
                         "pandascore transient status=%s; retry_in=%ss url=%s",
-                        resp.status_code,
-                        wait,
-                        url,
+                        resp.status_code, wait, url,
                     )
                     time.sleep(wait)
                     continue
@@ -61,9 +58,8 @@ class PandascoreClient:
 
                 return resp.json()
             except PandascoreError:
-                # Erros permanentes (ex.: 404 route not found, 401 invalid token) não devem dar retry.
                 raise
-            except Exception as exc:  # noqa: BLE001 - boundary: network/unknown errors can retry
+            except Exception as exc:  # noqa: BLE001
                 last_exc = exc
                 wait = min(2**attempt, 30)
                 logger.warning("pandascore request failed; retry_in=%ss url=%s err=%r", wait, url, exc)
@@ -79,9 +75,6 @@ class PandascoreClient:
         per_page: int = 100,
         max_pages: int = 10,
     ) -> list[Any]:
-        """
-        Paginação padrão da Pandascore via page[number] / page[size].
-        """
         out: list[Any] = []
         params = dict(params or {})
         params.setdefault("page[size]", per_page)
@@ -107,12 +100,7 @@ def from_env() -> PandascoreClient:
 
 
 def search_lol_leagues(*, name_query: str, max_pages: int = 3) -> list[dict[str, Any]]:
-    """
-    Busca ligas de LoL por nome (ex.: 'CBLOL', 'Circuitão').
-    Útil para descobrir IDs oficiais para filtros.
-    """
     client = from_env()
-    # A Pandascore costuma suportar search[name]=...
     return client.paginate(
         "/lol/leagues",
         params={"search[name]": name_query},
@@ -127,12 +115,6 @@ def upcoming_lol_matches(
     series_ids: list[int] | None = None,
     max_pages: int = 5,
 ) -> list[dict[str, Any]]:
-    """
-    Próximas partidas de LoL.
-
-    Filtros aceitos são enviados no padrão filter[<field>]=...
-    (a API aceita CSV em muitos casos; mantemos flexível).
-    """
     client = from_env()
     params: dict[str, Any] = {}
 
@@ -147,9 +129,6 @@ def upcoming_lol_matches(
 
 
 def upcoming_br_lol_matches(*, max_pages: int = 5) -> list[dict[str, Any]]:
-    """
-    Atalho: próximas partidas do escopo BR inicial (CBLOL + Circuitão).
-    """
     return upcoming_lol_matches(league_ids=BR_DEFAULT_LEAGUE_IDS, max_pages=max_pages)
 
 
@@ -161,8 +140,6 @@ def lol_match_by_id(*, match_id: int) -> dict[str, Any]:
             raise PandascoreError(f"expected dict payload, got {type(data)}")
         return data
     except PandascoreError as exc:
-        # Alguns tokens/planos permitem listar matches mas bloqueiam /matches/{id}.
-        # Fallback: buscar via listagem com filter[id]=...
         msg = str(exc)
         if "status=403" not in msg:
             raise
@@ -174,10 +151,111 @@ def lol_match_by_id(*, match_id: int) -> dict[str, Any]:
 
 def lol_team_players(*, team_id: int) -> list[dict[str, Any]]:
     client = from_env()
-    # A rota /lol/teams/{id}/players não existe em alguns ambientes (retorna 404).
-    # Estratégia alternativa: listar players filtrando por team_id.
     data = client.paginate("/lol/players", params={"filter[team_id]": str(team_id)}, max_pages=3)
     if not isinstance(data, list):
         raise PandascoreError(f"expected list payload, got {type(data)}")
     return [x for x in data if isinstance(x, dict)]
 
+
+def lol_team_past_matches(
+    *,
+    team_id: int,
+    last_n: int = 10,
+) -> list[dict[str, Any]]:
+    """
+    Retorna as últimas `last_n` partidas finalizadas de um time,
+    ordenadas da mais recente para a mais antiga.
+    Fail-safe: erros de API retornam lista vazia.
+    """
+    client = from_env()
+    try:
+        matches = client.paginate(
+            "/lol/matches",
+            params={
+                "filter[opponent_id]": str(team_id),
+                "filter[status]": "finished",
+                "sort": "-begin_at",
+                "page[size]": last_n,
+            },
+            per_page=last_n,
+            max_pages=1,
+        )
+    except PandascoreError as exc:
+        logger.warning("falha ao buscar histórico do time=%s err=%r", team_id, exc)
+        return []
+
+    # Deduplicar por id e garantir status finished
+    seen: set[int] = set()
+    result: list[dict[str, Any]] = []
+    for m in matches:
+        if not isinstance(m, dict):
+            continue
+        mid = m.get("id")
+        if mid is None or mid in seen:
+            continue
+        if m.get("status") != "finished":
+            continue
+        seen.add(mid)
+        result.append(m)
+
+    return result[:last_n]
+
+
+def lol_head_to_head(
+    *,
+    team_a_id: int,
+    team_b_id: int,
+    last_n: int = 10,
+) -> list[dict[str, Any]]:
+    """
+    Retorna as últimas `last_n` partidas finalizadas entre dois times.
+    Busca por partidas onde ambos os times são opponents.
+    Fail-safe: erros de API retornam lista vazia.
+    """
+    client = from_env()
+    try:
+        matches = client.paginate(
+            "/lol/matches",
+            params={
+                "filter[opponent_id]": f"{team_a_id},{team_b_id}",
+                "filter[status]": "finished",
+                "sort": "-begin_at",
+                "page[size]": last_n * 2,  # margem para filtrar após receber
+            },
+            per_page=last_n * 2,
+            max_pages=1,
+        )
+    except PandascoreError as exc:
+        logger.warning(
+            "falha ao buscar H2H team_a=%s team_b=%s err=%r", team_a_id, team_b_id, exc
+        )
+        return []
+
+    seen: set[int] = set()
+    result: list[dict[str, Any]] = []
+
+    for m in matches:
+        if not isinstance(m, dict):
+            continue
+        if m.get("status") != "finished":
+            continue
+        mid = m.get("id")
+        if mid is None or mid in seen:
+            continue
+
+        # Confirmar que os DOIS times estão nos opponents desse match
+        opponents = m.get("opponents") or []
+        opp_ids: set[int] = set()
+        for opp in opponents:
+            if isinstance(opp, dict):
+                o = opp.get("opponent") or {}
+                if isinstance(o, dict) and "id" in o:
+                    opp_ids.add(int(o["id"]))
+
+        if team_a_id not in opp_ids or team_b_id not in opp_ids:
+            continue
+
+        seen.add(mid)
+        result.append(m)
+
+    return result[:last_n]

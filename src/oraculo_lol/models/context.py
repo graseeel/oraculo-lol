@@ -61,6 +61,82 @@ class RiotEnrichment(BaseModel):
     details: dict[str, Any] = Field(default_factory=dict)
 
 
+# ---------------------------------------------------------------------------
+# Histórico de partidas
+# ---------------------------------------------------------------------------
+
+class MatchResult(BaseModel):
+    """
+    Resultado de uma partida passada, da perspectiva de um time.
+    won=True → vitória, won=False → derrota, won=None → indefinido.
+    """
+
+    match_id: int
+    date: datetime | None = None
+    opponent_name: str | None = None
+    opponent_id: int | None = None
+    won: bool | None = None
+    score_for: int | None = None       # games vencidos pelo time
+    score_against: int | None = None   # games vencidos pelo adversário
+    tournament_name: str | None = None
+    league_name: str | None = None
+
+
+class TeamHistory(BaseModel):
+    """Histórico recente de um time: forma + lista de resultados."""
+
+    team_id: int
+    team_name: str | None = None
+    matches: list[MatchResult] = Field(default_factory=list)
+
+    @property
+    def total(self) -> int:
+        return len([m for m in self.matches if m.won is not None])
+
+    @property
+    def wins(self) -> int:
+        return len([m for m in self.matches if m.won is True])
+
+    @property
+    def losses(self) -> int:
+        return len([m for m in self.matches if m.won is False])
+
+    @property
+    def winrate(self) -> float | None:
+        if self.total == 0:
+            return None
+        return self.wins / self.total
+
+
+class HeadToHead(BaseModel):
+    """
+    Histórico de confrontos diretos entre dois times.
+    Os resultados em matches são da perspectiva do team_a.
+    """
+
+    team_a_id: int
+    team_a_name: str | None = None
+    team_b_id: int
+    team_b_name: str | None = None
+    matches: list[MatchResult] = Field(default_factory=list)
+
+    @property
+    def total(self) -> int:
+        return len([m for m in self.matches if m.won is not None])
+
+    @property
+    def team_a_wins(self) -> int:
+        return len([m for m in self.matches if m.won is True])
+
+    @property
+    def team_b_wins(self) -> int:
+        return len([m for m in self.matches if m.won is False])
+
+
+# ---------------------------------------------------------------------------
+# Contexto completo da partida
+# ---------------------------------------------------------------------------
+
 class MatchContext(BaseModel):
     version: Literal["v1"] = "v1"
     created_at: datetime
@@ -77,8 +153,11 @@ class MatchContext(BaseModel):
     teams: list[TeamRef] = Field(default_factory=list)
     official_rosters: list[OfficialRosterSnapshot] = Field(default_factory=list)
 
+    # Campos de histórico — default vazio para não quebrar JSONs antigos
+    team_histories: list[TeamHistory] = Field(default_factory=list)
+    head_to_head: HeadToHead | None = None
+
     stats: dict[str, Any] = Field(default_factory=dict)
     riot_enrichment: RiotEnrichment = Field(default_factory=RiotEnrichment)
 
     source_payloads: dict[str, Any] = Field(default_factory=dict)
-
