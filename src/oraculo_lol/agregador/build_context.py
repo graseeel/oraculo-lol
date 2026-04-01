@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -215,11 +216,17 @@ def build_match_context(*, pandascore_match_id: int, include_payloads: bool = Tr
         )
 
     # Histórico individual (fail-safe por time)
-    team_histories = [_build_team_history(t) for t in teams]
+    # Sleep entre chamadas para respeitar rate limit do plano Free da Pandascore
+    team_histories: list[TeamHistory] = []
+    for i, t in enumerate(teams):
+        if i > 0:
+            time.sleep(2)
+        team_histories.append(_build_team_history(t))
 
     # Head-to-Head (só com exatamente 2 times)
     head_to_head: HeadToHead | None = None
     if len(teams) == 2:
+        time.sleep(2)
         head_to_head = _build_head_to_head(teams[0], teams[1])
 
     return MatchContext(
