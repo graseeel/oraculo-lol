@@ -34,10 +34,7 @@ def _build_oauth_header(
     access_token: str,
     access_token_secret: str,
 ) -> str:
-    """
-    Gera o header Authorization OAuth 1.0a para a X API v2.
-    Implementação manual — sem dependência de libs externas.
-    """
+    """Gera o header Authorization OAuth 1.0a para a X API v2."""
     oauth_params = {
         "oauth_consumer_key": api_key,
         "oauth_nonce": uuid.uuid4().hex,
@@ -47,7 +44,6 @@ def _build_oauth_header(
         "oauth_version": "1.0",
     }
 
-    # Signature base string
     param_string = "&".join(
         f"{_percent_encode(k)}={_percent_encode(v)}"
         for k, v in sorted(oauth_params.items())
@@ -58,10 +54,7 @@ def _build_oauth_header(
         _percent_encode(param_string),
     ])
 
-    # Signing key
     signing_key = f"{_percent_encode(api_secret)}&{_percent_encode(access_token_secret)}"
-
-    # HMAC-SHA1
     signature = hmac.new(
         signing_key.encode("utf-8"),
         base_string.encode("utf-8"),
@@ -71,7 +64,6 @@ def _build_oauth_header(
     import base64
     oauth_params["oauth_signature"] = base64.b64encode(signature).decode("utf-8")
 
-    # Montar header
     header_parts = ", ".join(
         f'{_percent_encode(k)}="{_percent_encode(v)}"'
         for k, v in sorted(oauth_params.items())
@@ -89,8 +81,8 @@ class TwitterClient:
 
     def post_tweet(self, text: str) -> str:
         """
-        Posta um tweet e retorna o tweet_id.
-        Fail-fast em erros permanentes (4xx). Não retenta para evitar duplicatas.
+        Posta um tweet via API v2. Retorna o tweet_id.
+        Levanta TwitterError em caso de falha — incluindo 402 (plano pago necessário).
         """
         auth_header = _build_oauth_header(
             method="POST",
@@ -111,8 +103,9 @@ class TwitterClient:
                 resp = client.post(TWEET_URL, json={"text": text}, headers=headers)
 
             if resp.status_code == 429:
-                raise TwitterError("X rate limit atingido (429) — não retentando para evitar ban")
-
+                raise TwitterError("X rate limit atingido (429)")
+            if resp.status_code == 402:
+                raise TwitterError("X requer plano pago (402) — usando fallback browser")
             if resp.status_code >= 400:
                 raise TwitterError(
                     f"X error status={resp.status_code} body={resp.text[:300]}"
@@ -120,7 +113,7 @@ class TwitterClient:
 
             data = resp.json()
             tweet_id = data.get("data", {}).get("id", "?")
-            logger.info("tweet postado id=%s chars=%d", tweet_id, len(text))
+            logger.info("tweet postado via API id=%s chars=%d", tweet_id, len(text))
             return tweet_id
 
         except TwitterError:
@@ -140,7 +133,7 @@ def from_env() -> TwitterClient:
         }.items() if not v
     ]
     if missing:
-        raise TwitterError(f"credenciais X não configuradas: {missing}")
+        raise TwitterError(f"credenciais X API não configuradas: {missing}")
     return TwitterClient(
         api_key=s.twitter_api_key,
         api_secret=s.twitter_api_secret,
@@ -151,16 +144,29 @@ def from_env() -> TwitterClient:
 
 def post_tweet_safe(text: str) -> bool:
     """
-    Wrapper fail-safe: posta e retorna True se OK, False se falhou.
+    Wrapper fail-safe com fallback automático:
+    1. Tenta API v2 (se credenciais configuradas)
+    2. Se falhar com 402 (plano pago) → tenta browser via Playwright
+    3. Qualquer outro erro → loga e retorna False
+
     Nunca levanta exceção — ideal para uso no scheduler.
     """
+    # Tentativa 1: API
     try:
         client = from_env()
         client.post_tweet(text)
         return True
     except TwitterError as exc:
-        logger.warning("falha ao postar no X: %s", exc)
-        return False
+        msg = str(exc)
+        if "402" in msg or "plano pago" in msg:
+            logger.info("API X requer plano pago — tentando fallback via browser")
+        else:
+            logger.warning("falha na API X: %s", exc)
+            return False
     except Exception as exc:  # noqa: BLE001
-        logger.warning("erro inesperado ao postar no X: %r", exc)
+        logger.warning("erro inesperado na API X: %r", exc)
         return False
+
+    # Tentativa 2: Browser fallback
+    from .twitter_browser import post_tweet_browser  # noqa: PLC0415
+    return post_tweet_browser(text)
