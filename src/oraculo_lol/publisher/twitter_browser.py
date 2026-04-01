@@ -64,15 +64,24 @@ def post_tweet_browser(text: str) -> bool:
             compose = wait.until(
                 EC.element_to_be_clickable((By.CSS_SELECTOR, '[data-testid="tweetTextarea_0"]'))
             )
+            # Clica na caixa e garante foco
+            compose.click()
+            time.sleep(1)
+            # Limpa qualquer texto residual
+            from selenium.webdriver.common.keys import Keys  # noqa: PLC0415
+            from selenium.webdriver.common.action_chains import ActionChains  # noqa: PLC0415
+            ActionChains(driver).key_down(Keys.COMMAND).send_keys("a").key_up(Keys.COMMAND).perform()
+            time.sleep(0.3)
+            compose.send_keys(Keys.DELETE)
+            time.sleep(0.3)
+            # Copia e cola via clipboard (suporta emojis)
+            import pyperclip  # noqa: PLC0415
+            pyperclip.copy(text)
+            time.sleep(0.5)
             compose.click()
             time.sleep(0.5)
-            # Usa clipboard para suportar emojis e caracteres especiais
-            import pyperclip  # noqa: PLC0415
-            from selenium.webdriver.common.keys import Keys  # noqa: PLC0415
-            pyperclip.copy(text)
-            from selenium.webdriver.common.action_chains import ActionChains  # noqa: PLC0415
             ActionChains(driver).key_down(Keys.COMMAND).send_keys("v").key_up(Keys.COMMAND).perform()
-            time.sleep(1)
+            time.sleep(2)
 
             # Botão de postar — usa JS click para bypassar elementos sobrepostos
             post_btn = wait.until(

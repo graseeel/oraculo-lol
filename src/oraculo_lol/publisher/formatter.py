@@ -5,23 +5,14 @@ from ..oraculo.prediction import Prediction
 TWITTER_LIMIT = 280
 THREADS_LIMIT = 500
 
-# Emojis por nível de confiança
 _CONFIDENCE_EMOJI = {
     "alta": "🔥",
     "média": "⚡",
     "baixa": "🤔",
 }
 
-def _prob_bar(prob: float | None) -> str:
-    """Barra de probabilidade com caracteres compatíveis em todos os dispositivos."""
-    if prob is None:
-        return ""
-    filled = round(prob * 10)
-    return "●" * filled + "○" * (10 - filled)
-
 
 def _header(prediction: Prediction) -> str:
-    """Linha de abertura com os times e o favorito."""
     teams = prediction.teams
     if len(teams) == 2:
         a, b = teams[0].name, teams[1].name
@@ -30,20 +21,20 @@ def _header(prediction: Prediction) -> str:
 
 
 def _winner_line(prediction: Prediction) -> str:
+    """Linha com favorito e probabilidades inline — sem bolinhas."""
     emoji = _CONFIDENCE_EMOJI.get(prediction.confidence or "", "🎯")
     conf = (prediction.confidence or "?").upper()
-    winner = prediction.winner if hasattr(prediction, "winner") else prediction.predicted_winner
+    winner = prediction.predicted_winner or "?"
+
+    # Probabilidades inline: LOUD (75%) vs paiN (25%)
+    if len(prediction.teams) == 2:
+        a, b = prediction.teams[0], prediction.teams[1]
+        pa = f"{a.win_probability * 100:.0f}%" if a.win_probability is not None else "?"
+        pb = f"{b.win_probability * 100:.0f}%" if b.win_probability is not None else "?"
+        probs = f"{a.name} ({pa}) vs {b.name} ({pb})"
+        return f"{emoji} Favorito: {winner} | {conf}\n{probs}"
+
     return f"{emoji} Favorito: {winner} | Confiança: {conf}"
-
-
-def _probs_block(prediction: Prediction) -> str:
-    lines = []
-    for t in prediction.teams:
-        prob = t.win_probability
-        pct = f"{prob * 100:.0f}%" if prob is not None else "?"
-        bar = _prob_bar(prob)
-        lines.append(f"{t.name}: {pct} {bar}")
-    return "\n".join(lines)
 
 
 def _hashtags() -> str:
@@ -53,47 +44,47 @@ def _hashtags() -> str:
 def format_for_twitter(prediction: Prediction) -> str:
     """
     Monta o post para o X respeitando 280 caracteres.
-    Prioridade: header + favorito + probabilidades + hashtags.
-    O reasoning é incluído só se couber.
+    Trunca o reasoning deterministicamente — não depende do GPT respeitar o limite.
     """
     header = _header(prediction)
     winner = _winner_line(prediction)
-    probs = _probs_block(prediction)
     tags = _hashtags()
-
-    # Versão completa com reasoning
     reasoning = prediction.reasoning or ""
-    full = f"{header}\n{winner}\n\n{probs}\n\n{reasoning}\n\n{tags}"
-    if len(full) <= TWITTER_LIMIT:
-        return full
 
-    # Sem reasoning
-    short = f"{header}\n{winner}\n\n{probs}\n\n{tags}"
-    if len(short) <= TWITTER_LIMIT:
-        return short
+    # Calcula espaço disponível para o reasoning
+    base = f"{header}\n{winner}\n\n"
+    suffix = f"\n\n{tags}"
+    available = TWITTER_LIMIT - len(base) - len(suffix)
 
-    # Sem probabilidades (último recurso)
-    minimal = f"{header}\n{winner}\n\n{tags}"
-    return minimal[:TWITTER_LIMIT]
+    if available > 20 and reasoning:
+        if len(reasoning) <= available:
+            truncated = reasoning
+        else:
+            # Trunca na última palavra inteira antes do limite
+            truncated = reasoning[:available - 3].rsplit(" ", 1)[0] + "..."
+        return f"{base}{truncated}{suffix}"
+
+    # Sem reasoning se não couber
+    short = f"{header}\n{winner}\n\n{tags}"
+    return short[:TWITTER_LIMIT]
 
 
 def format_for_threads(prediction: Prediction) -> str:
     """
     Monta o post para o Threads respeitando 500 caracteres.
-    Threads tem mais espaço — inclui reasoning quando possível.
+    Threads tem mais espaço — reasoning completo quando possível.
     """
     header = _header(prediction)
     winner = _winner_line(prediction)
-    probs = _probs_block(prediction)
     reasoning = prediction.reasoning or ""
     tags = _hashtags()
 
-    full = f"{header}\n{winner}\n\n{probs}\n\n{reasoning}\n\n{tags}"
+    full = f"{header}\n{winner}\n\n{reasoning}\n\n{tags}"
     if len(full) <= THREADS_LIMIT:
         return full
 
-    # Trunca o reasoning se não couber
-    base = f"{header}\n{winner}\n\n{probs}\n\n"
+    # Trunca reasoning
+    base = f"{header}\n{winner}\n\n"
     suffix = f"\n\n{tags}"
     available = THREADS_LIMIT - len(base) - len(suffix)
     if available > 20 and reasoning:
