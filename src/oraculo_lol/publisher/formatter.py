@@ -12,12 +12,12 @@ _CONFIDENCE_EMOJI = {
     "baixa": "🤔",
 }
 
-# Emojis por probabilidade de vitória
 def _prob_bar(prob: float | None) -> str:
+    """Barra de probabilidade com caracteres compatíveis em todos os dispositivos."""
     if prob is None:
         return ""
     filled = round(prob * 10)
-    return "█" * filled + "░" * (10 - filled)
+    return "●" * filled + "○" * (10 - filled)
 
 
 def _header(prediction: Prediction) -> str:

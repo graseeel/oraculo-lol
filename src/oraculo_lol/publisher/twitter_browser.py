@@ -6,7 +6,8 @@ from pathlib import Path
 
 logger = logging.getLogger("oraculo_lol.publisher.twitter_browser")
 
-SESSION_DIR = Path(__file__).resolve().parents[4] / "data" / "browser_session"
+FIREFOX_EXECUTABLE = "/Applications/Firefox.app/Contents/MacOS/firefox"
+SESSION_DIR = Path(__file__).resolve().parents[3] / "data" / "browser_session"
 
 
 class TwitterBrowserError(RuntimeError):
@@ -15,7 +16,7 @@ class TwitterBrowserError(RuntimeError):
 
 def post_tweet_browser(text: str) -> bool:
     """
-    Posta um tweet usando a sessão salva pelo setup_twitter_session.py.
+    Posta um tweet usando o Firefox com sessão salva pelo setup_twitter_session.py.
     Retorna True se postou, False se falhou.
 
     Pré-requisito: rodar `python -m scripts.setup_twitter_session` uma vez.
@@ -23,7 +24,7 @@ def post_tweet_browser(text: str) -> bool:
     try:
         from playwright.sync_api import sync_playwright  # noqa: PLC0415
     except ImportError:
-        logger.error("playwright não instalado — rode: pip install playwright && playwright install chromium")
+        logger.error("playwright não instalado")
         return False
 
     if not SESSION_DIR.exists():
@@ -34,12 +35,16 @@ def post_tweet_browser(text: str) -> bool:
         )
         return False
 
+    if not Path(FIREFOX_EXECUTABLE).exists():
+        logger.error("Firefox não encontrado em %s", FIREFOX_EXECUTABLE)
+        return False
+
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch_persistent_context(
+            browser = p.firefox.launch_persistent_context(
                 user_data_dir=str(SESSION_DIR),
                 headless=True,
-                args=["--no-sandbox"],
+                executable_path=FIREFOX_EXECUTABLE,
             )
 
             page = browser.new_page()
@@ -55,7 +60,7 @@ def post_tweet_browser(text: str) -> bool:
                 browser.close()
                 return False
 
-            # Clicar na caixa de composição do tweet
+            # Caixa de composição do tweet
             compose = page.locator('[data-testid="tweetTextarea_0"]').first
             compose.wait_for(state="visible", timeout=15_000)
             compose.click()
@@ -69,7 +74,7 @@ def post_tweet_browser(text: str) -> bool:
             post_btn.click()
             time.sleep(3)
 
-            logger.info("tweet postado via browser (%d chars)", len(text))
+            logger.info("tweet postado via Firefox (%d chars)", len(text))
             browser.close()
             return True
 
