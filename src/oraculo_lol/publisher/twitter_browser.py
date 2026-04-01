@@ -6,7 +6,6 @@ from pathlib import Path
 
 logger = logging.getLogger("oraculo_lol.publisher.twitter_browser")
 
-FIREFOX_EXECUTABLE = "/Applications/Firefox.app/Contents/MacOS/firefox"
 SESSION_DIR = Path(__file__).resolve().parents[3] / "data" / "browser_session"
 
 
@@ -16,15 +15,15 @@ class TwitterBrowserError(RuntimeError):
 
 def post_tweet_browser(text: str) -> bool:
     """
-    Posta um tweet usando o Firefox com sessão salva pelo setup_twitter_session.py.
+    Posta um tweet usando undetected-chromedriver com sessão salva.
     Retorna True se postou, False se falhou.
 
     Pré-requisito: rodar `python -m scripts.setup_twitter_session` uma vez.
     """
     try:
-        from playwright.sync_api import sync_playwright  # noqa: PLC0415
+        import undetected_chromedriver as uc  # noqa: PLC0415
     except ImportError:
-        logger.error("playwright não instalado")
+        logger.error("undetected-chromedriver não instalado — rode: pip install undetected-chromedriver")
         return False
 
     if not SESSION_DIR.exists():
@@ -35,49 +34,64 @@ def post_tweet_browser(text: str) -> bool:
         )
         return False
 
-    if not Path(FIREFOX_EXECUTABLE).exists():
-        logger.error("Firefox não encontrado em %s", FIREFOX_EXECUTABLE)
-        return False
-
     try:
-        with sync_playwright() as p:
-            browser = p.firefox.launch_persistent_context(
-                user_data_dir=str(SESSION_DIR),
-                headless=True,
-                executable_path=FIREFOX_EXECUTABLE,
-            )
+        options = uc.ChromeOptions()
+        options.add_argument(f"--user-data-dir={SESSION_DIR}")
+        options.add_argument("--no-first-run")
+        options.add_argument("--no-default-browser-check")
 
-            page = browser.new_page()
+        driver = uc.Chrome(options=options, headless=False, version_main=146)
 
+        try:
             # Verifica se a sessão ainda é válida
-            page.goto("https://x.com/home", wait_until="domcontentloaded", timeout=30_000)
+            driver.get("https://x.com/home")
             time.sleep(3)
 
-            if "login" in page.url or "i/flow" in page.url:
+            current_url = driver.current_url
+            if "login" in current_url or "i/flow" in current_url:
                 logger.warning(
                     "sessão do X expirou — rode: python -m scripts.setup_twitter_session"
                 )
-                browser.close()
+                driver.quit()
                 return False
 
             # Caixa de composição do tweet
-            compose = page.locator('[data-testid="tweetTextarea_0"]').first
-            compose.wait_for(state="visible", timeout=15_000)
+            from selenium.webdriver.common.by import By  # noqa: PLC0415
+            from selenium.webdriver.support import expected_conditions as EC  # noqa: PLC0415
+            from selenium.webdriver.support.ui import WebDriverWait  # noqa: PLC0415
+
+            wait = WebDriverWait(driver, 15)
+            compose = wait.until(
+                EC.element_to_be_clickable((By.CSS_SELECTOR, '[data-testid="tweetTextarea_0"]'))
+            )
             compose.click()
             time.sleep(0.5)
-            compose.fill(text)
-            time.sleep(0.5)
+            # Usa clipboard para suportar emojis e caracteres especiais
+            import pyperclip  # noqa: PLC0415
+            from selenium.webdriver.common.keys import Keys  # noqa: PLC0415
+            pyperclip.copy(text)
+            from selenium.webdriver.common.action_chains import ActionChains  # noqa: PLC0415
+            ActionChains(driver).key_down(Keys.COMMAND).send_keys("v").key_up(Keys.COMMAND).perform()
+            time.sleep(1)
 
-            # Botão de postar
-            post_btn = page.locator('[data-testid="tweetButtonInline"]').first
-            post_btn.wait_for(state="visible", timeout=10_000)
-            post_btn.click()
+            # Botão de postar — usa JS click para bypassar elementos sobrepostos
+            post_btn = wait.until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, '[data-testid="tweetButtonInline"]'))
+            )
+            driver.execute_script("arguments[0].click();", post_btn)
             time.sleep(3)
 
-            logger.info("tweet postado via Firefox (%d chars)", len(text))
-            browser.close()
+            logger.info("tweet postado via undetected-chromedriver (%d chars)", len(text))
+            driver.quit()
             return True
 
+        except Exception as exc:  # noqa: BLE001
+            import traceback
+            logger.warning("falha ao postar via browser: %r", exc)
+            logger.warning("traceback: %s", traceback.format_exc())
+            driver.quit()
+            return False
+
     except Exception as exc:  # noqa: BLE001
-        logger.warning("falha ao postar via browser: %r", exc)
+        logger.warning("falha ao iniciar browser: %r", exc)
         return False
