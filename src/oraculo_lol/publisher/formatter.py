@@ -3,7 +3,7 @@ from __future__ import annotations
 from ..oraculo.prediction import Prediction
 
 TWITTER_LIMIT = 280
-THREADS_LIMIT = 500
+THREADS_LIMIT = 280  # Padronizado com o X para consistência entre plataformas
 
 _CONFIDENCE_EMOJI = {
     "alta": "🔥",
