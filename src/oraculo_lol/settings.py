@@ -30,6 +30,16 @@ class Settings(BaseSettings):
     llm_api_key: str = Field(default="", alias="LLM_API_KEY")
     llm_model: str = Field(default="", alias="LLM_MODEL")
 
+    # X (Twitter) — API v2 Free tier, OAuth 1.0a
+    twitter_api_key: str = Field(default="", alias="TWITTER_API_KEY")
+    twitter_api_secret: str = Field(default="", alias="TWITTER_API_SECRET")
+    twitter_access_token: str = Field(default="", alias="TWITTER_ACCESS_TOKEN")
+    twitter_access_token_secret: str = Field(default="", alias="TWITTER_ACCESS_TOKEN_SECRET")
+
+    # Threads (Meta)
+    threads_user_id: str = Field(default="", alias="THREADS_USER_ID")
+    threads_access_token: str = Field(default="", alias="THREADS_ACCESS_TOKEN")
+
     def abs_data_dir(self) -> Path:
         p = self.data_dir
         return (project_root() / p) if not p.is_absolute() else p
@@ -41,4 +51,3 @@ class Settings(BaseSettings):
 
 def load_settings() -> Settings:
     return Settings()
-
