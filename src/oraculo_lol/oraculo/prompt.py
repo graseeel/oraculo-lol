@@ -23,7 +23,7 @@ O formato esperado é:
 
 Regras para o reasoning:
 - Escreva em português brasileiro corrido, sem bullet points
-- Máximo de 180 caracteres — seja direto e objetivo
+- O número máximo de caracteres será informado na mensagem do usuário — respeite exatamente
 - Use dados reais fornecidos para embasar a análise
 - Termos em inglês permitidos apenas quando forem jargão consolidado do cenário: "stomp", "diff", "carry", "feed"
 - Nunca use "miracle run", "missão impossível" ou expressões genéricas de hype
@@ -42,8 +42,20 @@ def _fmt_winrate(history: TeamHistory) -> str:
     return f"{history.wins}V {history.losses}D ({pct} de vitórias)"
 
 
-def build_prompt(ctx: MatchContext) -> str:
+def build_prompt(ctx: MatchContext, max_reasoning_chars: int) -> str:
     lines: list[str] = []
+
+    # --- Instrução de limite de reasoning ---
+    if max_reasoning_chars > 0:
+        lines.append(
+            f"⚠️ LIMITE DO REASONING: exatamente até {max_reasoning_chars} caracteres. "
+            "Não ultrapasse. Não precisa preencher tudo, mas use bem o espaço.\n"
+        )
+    else:
+        lines.append(
+            "⚠️ LIMITE DO REASONING: espaço insuficiente nesta postagem. "
+            'Defina reasoning como "" (string vazia).\n'
+        )
 
     # --- Cabeçalho ---
     lines.append("## Dados da Partida\n")
@@ -114,7 +126,10 @@ def build_prompt(ctx: MatchContext) -> str:
     elif ctx.head_to_head and ctx.head_to_head.total == 0:
         a = ctx.head_to_head.team_a_name or str(ctx.head_to_head.team_a_id)
         b = ctx.head_to_head.team_b_name or str(ctx.head_to_head.team_b_id)
-        lines.append(f"## Confronto Direto (H2H)\n\n{a} e {b} nunca se enfrentaram nos dados disponíveis.\n")
+        lines.append(
+            f"## Confronto Direto (H2H)\n\n"
+            f"{a} e {b} nunca se enfrentaram nos dados disponíveis.\n"
+        )
 
     # --- Stats extras ---
     if ctx.stats:

@@ -8,6 +8,7 @@ from typing import Any
 from ..agregador.build_context import build_match_context
 from ..models.context import MatchContext
 from ..paths import ensure_dir
+from ..publisher.layout import calc_available_chars
 from ..settings import load_settings
 from .llm import LLMError, from_env as llm_from_env
 from .prediction import Prediction, TeamPrediction, save_prediction_json
@@ -17,7 +18,6 @@ logger = logging.getLogger("oraculo_lol.oraculo.runner")
 
 
 def _load_context_from_file(path: Path) -> MatchContext:
-    """Carrega e valida um MatchContext de um arquivo JSON."""
     if not path.exists():
         raise FileNotFoundError(f"arquivo de contexto não encontrado: {path}")
     try:
@@ -28,17 +28,11 @@ def _load_context_from_file(path: Path) -> MatchContext:
 
 
 def _default_context_path(match_id: int) -> Path:
-    """Caminho padrão onde o agregador salva o contexto de um match."""
     s = load_settings()
     return s.abs_data_dir() / "context" / f"pandascore_match_{match_id}.json"
 
 
 def _parse_llm_response(raw: str, match_id: int, model: str) -> Prediction:
-    """
-    Tenta parsear o JSON retornado pela LLM.
-    Se falhar, retorna um Prediction com parse_error=True e reasoning preservado.
-    """
-    # Remove possíveis fences de markdown que o modelo possa ter incluído
     cleaned = raw.strip()
     if cleaned.startswith("```"):
         lines = cleaned.splitlines()
@@ -55,7 +49,7 @@ def _parse_llm_response(raw: str, match_id: int, model: str) -> Prediction:
             llm_model=model,
             raw_response=raw,
             parse_error=True,
-            reasoning=raw,  # preserva o texto para leitura humana
+            reasoning=raw,
         )
 
     teams = [
@@ -76,6 +70,29 @@ def _parse_llm_response(raw: str, match_id: int, model: str) -> Prediction:
         reasoning=data.get("reasoning"),
         raw_response=raw,
         parse_error=False,
+    )
+
+
+def _calc_reasoning_limit(ctx: MatchContext) -> int:
+    """
+    Calcula o limite de chars para o reasoning com base nos times do contexto.
+    Usa os nomes como vêm do Pandascore — o _abbreviate interno cuida da abreviação.
+    """
+    if len(ctx.teams) == 2:
+        a, b = ctx.teams[0], ctx.teams[1]
+        return calc_available_chars(
+            team_a_name=a.name,
+            team_b_name=b.name,
+            predicted_winner=a.name,  # pior caso: nome do time A como vencedor
+            confidence="média",       # pior caso: "MÉDIA" tem 5 chars (mesmo que "ALTA")
+            win_prob_a=0.72,
+            win_prob_b=0.28,
+        )
+    return calc_available_chars(
+        team_a_name=None,
+        team_b_name=None,
+        predicted_winner=None,
+        confidence="média",
     )
 
 
@@ -102,7 +119,6 @@ def run_prediction(
         logger.info("carregando contexto de arquivo: %s", context_file)
         ctx = _load_context_from_file(context_file)
     else:
-        # match_id garantidamente não é None aqui
         default_path = _default_context_path(match_id)  # type: ignore[arg-type]
         if default_path.exists():
             logger.info("contexto encontrado em cache: %s", default_path)
@@ -115,13 +131,21 @@ def run_prediction(
 
     effective_match_id = ctx.pandascore_match_id
 
+    # --- Calcular limite dinâmico de reasoning ---
+    max_reasoning_chars = _calc_reasoning_limit(ctx)
+    logger.info(
+        "limite dinâmico de reasoning: %d chars para match_id=%s",
+        max_reasoning_chars,
+        effective_match_id,
+    )
+
     # --- Chamar LLM ---
     client = llm_from_env()
     logger.info(
         "chamando LLM model=%s para match_id=%s", client.model, effective_match_id
     )
 
-    user_msg = build_prompt(ctx)
+    user_msg = build_prompt(ctx, max_reasoning_chars)
     raw = client.chat(system=system_prompt(), user=user_msg)
 
     # --- Parsear resposta ---
@@ -131,9 +155,10 @@ def run_prediction(
         logger.warning("LLM retornou resposta não-JSON para match_id=%s", effective_match_id)
     else:
         logger.info(
-            "previsão: vencedor=%r confiança=%s",
+            "previsão: vencedor=%r confiança=%s reasoning_len=%d",
             prediction.predicted_winner,
             prediction.confidence,
+            len(prediction.reasoning or ""),
         )
 
     return prediction
