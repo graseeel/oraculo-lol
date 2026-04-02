@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from ..models.postgame import MatchPostGame
 from ..oraculo.prediction import Prediction
 
 TWITTER_LIMIT = 280
@@ -16,26 +17,31 @@ _TEAM_NAMES: dict[str, str] = {
     "fluxo w7m": "Fluxo",
     "los grandes": "LOS",
     "vivo keyd stars": "Vivo Keyd",
-    "vivo keyd stars academy": "Vivo Keyd",
     "red canids kalunga": "Red Canids",
     "red canids": "Red Canids",
     "furia esports": "Furia",
     "loud": "Loud",
     "leviatan": "Leviatan",
+    "leviatan esports": "Leviatan",
     "leviatán": "Leviatan",
     "pain gaming": "Pain Gaming",
     # Circuito Desafiante
     "estral esports": "Estral Esports",
     "kabum! e-sports": "KaBuM!",
     "kabum! esports": "KaBuM!",
+    "kabum! ilha das lendas": "KaBuM!",
     "kabum!": "KaBuM!",
     "red academy": "Red Academy",
     "vivo keyd academy": "Vivo Academy",
+    "vivo keyd stars academy": "Vivo Keyd",
     "pain academy": "Pain Academy",
+    "pain gaming academy": "Pain Academy",
     "rmd gaming": "RMD Gaming",
     "7rex team": "7Rex Team",
+    "7rex": "7Rex Team",
     "ei nerd esports": "Ei Nerd Esports",
     "intz": "INTZ",
+    "intz e-sports": "INTZ",
     "team solid": "Team Solid",
 }
 
@@ -115,3 +121,73 @@ def format_for_threads(prediction: Prediction) -> str:
         return f"{base}{truncated}{suffix}"
 
     return f"{base}{suffix}"[:THREADS_LIMIT]
+
+
+# ---------------------------------------------------------------------------
+# Pós-jogo
+# ---------------------------------------------------------------------------
+
+def format_postgame_game(postgame: MatchPostGame) -> str:
+    """
+    Post de pós-jogo para um game individual.
+    Estrutura: header + placar + summary GPT + hashtags
+    """
+    if not postgame.games:
+        return ""
+
+    game = postgame.games[-1]
+    a = _abbreviate(postgame.team_a_name)
+    b = _abbreviate(postgame.team_b_name)
+    winner = _abbreviate(game.winner_name)
+    dur = game.length_minutes
+
+    header = f"🎮 Jogo {game.position} — {winner} vence em {dur}"
+    score = f"Série: {a} {postgame.score_a}x{postgame.score_b} {b}"
+    tags = _hashtags()
+
+    base = f"{header}\n{score}\n"
+    suffix = f"\n{tags}"
+    available = TWITTER_LIMIT - len(base) - len(suffix)
+
+    summary = postgame.game_summary or ""
+    if summary and available > 20:
+        if len(summary) > available:
+            summary = summary[:available - 3].rsplit(" ", 1)[0] + "..."
+        return f"{base}{summary}{suffix}"
+
+    return f"{base}{suffix}"[:TWITTER_LIMIT]
+
+
+def format_postgame_series(postgame: MatchPostGame) -> str:
+    """
+    Post de resultado final da série.
+    Estrutura: resultado + acerto/erro da previsão + summary + hashtags
+    """
+    a = _abbreviate(postgame.team_a_name)
+    b = _abbreviate(postgame.team_b_name)
+    winner = _abbreviate(
+        postgame.team_a_name if postgame.score_a > postgame.score_b else postgame.team_b_name
+    )
+
+    header = f"🏆 {winner} vence! {a} {postgame.score_a}x{postgame.score_b} {b}"
+
+    prediction_line = ""
+    if postgame.predicted_winner is not None:
+        if postgame.prediction_correct:
+            prediction_line = f"✅ Oráculo acertou! Previsto: {_abbreviate(postgame.predicted_winner)}"
+        else:
+            prediction_line = f"❌ Oráculo errou. Previa: {_abbreviate(postgame.predicted_winner)}"
+
+    tags = _hashtags()
+    summary = postgame.series_summary or ""
+
+    base = f"{header}\n{prediction_line}\n" if prediction_line else f"{header}\n"
+    suffix = f"\n{tags}"
+    available = TWITTER_LIMIT - len(base) - len(suffix)
+
+    if summary and available > 20:
+        if len(summary) > available:
+            summary = summary[:available - 3].rsplit(" ", 1)[0] + "..."
+        return f"{base}{summary}{suffix}"
+
+    return f"{base}{suffix}"[:TWITTER_LIMIT]
