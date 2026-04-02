@@ -79,6 +79,7 @@ class TestAbbreviate:
             "FURIA Esports": "Furia",
             "LOUD": "Loud",
             "Leviatán": "Leviatan",
+            "Leviatan Esports": "Leviatan",  # grafia alternativa do Pandascore
             "pain gaming": "Pain Gaming",
         }
         for entrada, esperado in casos.items():
@@ -88,13 +89,17 @@ class TestAbbreviate:
         casos = {
             "Estral Esports": "Estral Esports",
             "KaBuM! e-Sports": "KaBuM!",
+            "KaBuM! Ilha das Lendas": "KaBuM!",   # grafia do Pandascore
             "RED Academy": "Red Academy",
             "Vivo Keyd Academy": "Vivo Academy",
             "pain academy": "Pain Academy",
+            "paiN Gaming Academy": "Pain Academy", # grafia do Pandascore
             "RMD Gaming": "RMD Gaming",
             "7Rex Team": "7Rex Team",
+            "7REX": "7Rex Team",                   # grafia do Pandascore
             "Ei Nerd Esports": "Ei Nerd Esports",
             "INTZ": "INTZ",
+            "INTZ e-Sports": "INTZ",               # grafia do Pandascore
             "Team Solid": "Team Solid",
         }
         for entrada, esperado in casos.items():
