@@ -129,8 +129,58 @@ def _fmt_draft_recent(enrichment: LiquipediaEnrichment, ctx: MatchContext) -> st
     return "\n".join(lines)
 
 
+def _load_recent_performance(last_n: int = 5) -> str:
+    """
+    Carrega os últimos N resultados do bot para incluir no prompt como feedback.
+    Só inclui previsões com resultado conhecido (prediction_correct não é None).
+    """
+    try:
+        from pathlib import Path
+        from ..settings import load_settings
+        import json as _json
+
+        s = load_settings()
+        pred_dir = s.abs_data_dir() / "predictions"
+        if not pred_dir.exists():
+            return ""
+
+        preds = []
+        for f in sorted(pred_dir.glob("*.json"), reverse=True):
+            try:
+                p = _json.loads(f.read_text(encoding="utf-8"))
+                if p.get("prediction_correct") is not None and not p.get("parse_error"):
+                    preds.append(p)
+                if len(preds) >= last_n:
+                    break
+            except Exception:
+                pass
+
+        if not preds:
+            return ""
+
+        lines = ["## Histórico Recente do Oráculo (use para calibrar sua confiança)\n"]
+        for p in preds:
+            teams = p.get("teams", [])
+            matchup = " vs ".join(t.get("name", "?") for t in teams) if teams else "?"
+            winner = p.get("predicted_winner", "?")
+            actual = p.get("actual_winner", "?")
+            correct = p.get("prediction_correct")
+            conf = p.get("confidence", "?")
+            status = "✅ ACERTO" if correct else "❌ ERRO"
+            lines.append(f"- {matchup}: previ {winner} ({conf}) → real: {actual} → {status}")
+        lines.append("")
+        return "\n".join(lines)
+    except Exception:
+        return ""
+
+
 def build_prompt(ctx: MatchContext, max_reasoning_chars: int, max_reasoning_long_chars: int = 1500) -> str:
     lines: list[str] = []
+
+    # Injeta histórico de performance do bot
+    performance = _load_recent_performance(last_n=5)
+    if performance:
+        lines.append(performance)
 
     if max_reasoning_chars > 0:
         lines.append(

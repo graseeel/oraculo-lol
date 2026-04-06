@@ -359,3 +359,98 @@ def fetch_recent_drafts(
         logger.warning("liquipedia: erro em fetch_recent_drafts err=%r", exc)
 
     return result
+
+def get_match_result(
+    *,
+    team_a_name: str,
+    team_b_name: str,
+    match_date: datetime,
+    delta_hours: int = 6,
+) -> dict[str, Any] | None:
+    """
+    Busca o resultado finalizado de uma partida na Liquipedia.
+    Retorna dict com: winner_name, score_a, score_b, team_a, team_b, tournament.
+    Retorna None se não encontrar ou falhar.
+
+    Usado como fallback quando a Pandascore falha durante o pós-jogo.
+    """
+    liq_a = _PANDASCORE_TO_LIQUIPEDIA.get(team_a_name.lower(), team_a_name)
+    liq_b = _PANDASCORE_TO_LIQUIPEDIA.get(team_b_name.lower(), team_b_name)
+
+    try:
+        client = from_env()
+        # Busca por team_a primeiro
+        data = client.get("/match", params={
+            "conditions": f"[[opponent::{liq_a}]] AND [[finished::1]]",
+            "order": "date DESC",
+            "limit": 10,
+        })
+        matches = data.get("result", []) if isinstance(data, dict) else []
+
+        for m in matches:
+            # Verifica se team_b também está nessa partida
+            opponents = m.get("match2opponents") or []
+            names = [o.get("name", "") for o in opponents]
+            if liq_b not in names:
+                continue
+
+            # Verifica se a data bate (dentro de delta_hours)
+            m_date_str = m.get("date", "")
+            if m_date_str:
+                try:
+                    m_date = datetime.fromisoformat(m_date_str.replace(" ", "T")).replace(tzinfo=timezone.utc)
+                    diff = abs((m_date - match_date.astimezone(timezone.utc)).total_seconds())
+                    if diff > delta_hours * 3600:
+                        continue
+                except Exception:
+                    pass
+
+            # Extrai vencedor e placar
+            winner_idx = m.get("winner")  # "1" ou "2"
+            score_a = score_b = 0
+            team_a_result = team_b_result = None
+
+            for opp in opponents:
+                opp_name = opp.get("name", "")
+                score = opp.get("score", 0) or 0
+                opp_id = str(opp.get("id", ""))
+                if opp_name == liq_a:
+                    score_a = score
+                    team_a_result = opp_name
+                elif opp_name == liq_b:
+                    score_b = score
+                    team_b_result = opp_name
+
+            # Determina vencedor pelo winner index
+            winner_name = None
+            if winner_idx and opponents:
+                try:
+                    winner_opp = next(
+                        (o for o in opponents if str(o.get("id")) == str(winner_idx)),
+                        None,
+                    )
+                    if winner_opp:
+                        winner_name = winner_opp.get("name")
+                except Exception:
+                    pass
+
+            logger.info(
+                "liquipedia: resultado encontrado %s %d×%d %s → vencedor=%s",
+                liq_a, score_a, score_b, liq_b, winner_name,
+            )
+            return {
+                "team_a": team_a_result or liq_a,
+                "team_b": team_b_result or liq_b,
+                "score_a": score_a,
+                "score_b": score_b,
+                "winner_name": winner_name,
+                "tournament": m.get("tournament"),
+                "date": m.get("date"),
+            }
+
+        logger.info("liquipedia: resultado não encontrado para %s vs %s", liq_a, liq_b)
+        return None
+
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("liquipedia: falha em get_match_result err=%r", exc)
+        return None

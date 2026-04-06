@@ -214,6 +214,109 @@ def _process_postgame(match: dict[str, Any], state: dict[str, Any]) -> None:
             logger.error("falha no resultado final match=%s err=%r", name, exc)
 
 
+def _try_postgame_from_liquipedia(match_id: int, state: dict[str, Any]) -> None:
+    """
+    Fallback: busca resultado da partida na Liquipedia quando a Pandascore falha.
+    Só age se a série ainda não foi postada.
+    """
+    posted_series: list[str] = state.setdefault("posted_series", [])
+    if str(match_id) in posted_series:
+        return
+
+    # Precisa do contexto para saber os nomes dos times e begin_at
+    try:
+        from oraculo_lol.settings import load_settings
+        from oraculo_lol.datasources.liquipedia import get_match_result
+        from oraculo_lol.models.postgame import MatchPostGame, GameResult
+        from oraculo_lol.oraculo.postgame_runner import run_postgame_analysis
+        import json as _json
+        from datetime import timezone
+
+        s = load_settings()
+        ctx_path = s.abs_data_dir() / "context" / f"pandascore_match_{match_id}.json"
+        if not ctx_path.exists():
+            logger.warning("fallback Liquipedia: contexto não encontrado match_id=%s", match_id)
+            return
+
+        ctx = _json.loads(ctx_path.read_text(encoding="utf-8"))
+        teams = ctx.get("teams", [])
+        if len(teams) < 2:
+            return
+
+        team_a_name = teams[0].get("name", "")
+        team_b_name = teams[1].get("name", "")
+        begin_at_str = ctx.get("begin_at")
+        begin_at = _parse_dt(begin_at_str) or datetime.now(timezone.utc)
+
+        result = get_match_result(
+            team_a_name=team_a_name,
+            team_b_name=team_b_name,
+            match_date=begin_at,
+            delta_hours=8,
+        )
+
+        if not result:
+            logger.info("fallback Liquipedia: resultado não encontrado match_id=%s", match_id)
+            return
+
+        winner_name = result.get("winner_name")
+        score_a = result.get("score_a", 0)
+        score_b = result.get("score_b", 0)
+
+        # Monta postgame mínimo
+        pred_data = None
+        pred_path = s.abs_data_dir() / "predictions" / f"pandascore_match_{match_id}.json"
+        if pred_path.exists():
+            pred_data = _json.loads(pred_path.read_text(encoding="utf-8"))
+
+        predicted_winner = pred_data.get("predicted_winner") if pred_data else None
+        confidence = pred_data.get("confidence") if pred_data else None
+        prediction_correct = None
+        if predicted_winner and winner_name:
+            from oraculo_lol.publisher.formatter import _abbreviate
+            prediction_correct = (
+                _abbreviate(predicted_winner).lower() == _abbreviate(winner_name).lower()
+            )
+
+        postgame = MatchPostGame(
+            created_at=datetime.now(timezone.utc),
+            pandascore_match_id=match_id,
+            team_a_id=teams[0].get("id", 0),
+            team_a_name=team_a_name,
+            team_b_id=teams[1].get("id", 0),
+            team_b_name=team_b_name,
+            score_a=score_a,
+            score_b=score_b,
+            games=[GameResult(game_id=1, position=1, winner_name=winner_name)],
+            predicted_winner=predicted_winner,
+            confidence=confidence,
+            prediction_correct=prediction_correct,
+        )
+        postgame.series_summary = run_postgame_analysis(postgame, mode="series")
+
+        tw = format_postgame_series(postgame)
+        th = format_postgame_series(postgame)
+        name = f"{team_a_name} vs {team_b_name}"
+        _post_both(tw, th, name)
+
+        # Salva resultado na previsão
+        _update_prediction_result(
+            match_id=match_id,
+            postgame=postgame,
+            match={"league": {"name": result.get("tournament", "")}},
+        )
+
+        posted_series.append(str(match_id))
+        _save_state(state)
+        logger.info(
+            "fallback Liquipedia: pós-jogo postado match_id=%s vencedor=%s",
+            match_id, winner_name,
+        )
+
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("fallback Liquipedia: falha match_id=%s err=%r", match_id, exc)
+
+
 def _monitor_active_matches(active_match_ids: list[int], state: dict[str, Any]) -> None:
     if not active_match_ids:
         return
@@ -232,7 +335,12 @@ def _monitor_active_matches(active_match_ids: list[int], state: dict[str, Any]) 
                 else:
                     logger.info("match_id=%s finalizado", match_id)
             except Exception as exc:  # noqa: BLE001
-                logger.error("falha ao monitorar match_id=%s err=%r", match_id, exc)
+                logger.error("falha ao monitorar match_id=%s via Pandascore err=%r — tentando Liquipedia", match_id, exc)
+                # Fallback: tenta buscar resultado na Liquipedia
+                try:
+                    _try_postgame_from_liquipedia(match_id, state)
+                except Exception as exc2:  # noqa: BLE001
+                    logger.error("fallback Liquipedia também falhou match_id=%s err=%r", match_id, exc2)
                 remaining.append(match_id)
         active_match_ids = remaining
 
