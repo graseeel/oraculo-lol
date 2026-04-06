@@ -16,7 +16,7 @@ class PlayerRef(BaseModel):
     id: int
     name: str | None = None
     slug: str | None = None
-    role: str | None = None  # só preencher se a fonte trouxer algo confiável
+    role: str | None = None
 
 
 class LeagueRef(BaseModel):
@@ -40,25 +40,45 @@ class SerieRef(BaseModel):
 
 
 class OfficialRosterSnapshot(BaseModel):
-    """
-    Roster "oficial" para a análise: origem Pandascore por IDs.
-    Não depende de texto do jogador como chave.
-    """
-
     source: Literal["pandascore"] = "pandascore"
     team: TeamRef
     players: list[PlayerRef] = Field(default_factory=list)
     fetched_at: datetime
-    raw: dict[str, Any] | None = None  # opcional p/ auditoria/debug
+    raw: dict[str, Any] | None = None
 
 
 class RiotEnrichment(BaseModel):
-    """
-    Enriquecimento opcional via Riot. Fail-safe: se não houver mapping confiável, fica ausente/empty.
-    """
-
     status: Literal["disabled", "missing_mapping", "ok", "partial", "error"] = "disabled"
     details: dict[str, Any] = Field(default_factory=dict)
+
+
+# ---------------------------------------------------------------------------
+# Liquipedia enrichment
+# ---------------------------------------------------------------------------
+
+class LiquipediaPlayerDraft(BaseModel):
+    """Jogador com campeão e role em um game específico."""
+    name: str
+    champion: str | None = None
+    role: str | None = None
+
+
+class LiquipediaTeamDraft(BaseModel):
+    """Draft de um time em um game."""
+    name: str
+    picks: list[str] = Field(default_factory=list)
+    bans: list[str] = Field(default_factory=list)
+    players: list[LiquipediaPlayerDraft] = Field(default_factory=list)
+
+
+class LiquipediaEnrichment(BaseModel):
+    """
+    Enriquecimento via Liquipedia — picks, bans e composições.
+    Fail-safe: status indica se os dados estão disponíveis.
+    """
+    status: Literal["disabled", "not_found", "ok", "error"] = "disabled"
+    teams: list[LiquipediaTeamDraft] = Field(default_factory=list)
+    raw: dict[str, Any] | None = None  # payload bruto para auditoria
 
 
 # ---------------------------------------------------------------------------
@@ -66,25 +86,18 @@ class RiotEnrichment(BaseModel):
 # ---------------------------------------------------------------------------
 
 class MatchResult(BaseModel):
-    """
-    Resultado de uma partida passada, da perspectiva de um time.
-    won=True → vitória, won=False → derrota, won=None → indefinido.
-    """
-
     match_id: int
     date: datetime | None = None
     opponent_name: str | None = None
     opponent_id: int | None = None
     won: bool | None = None
-    score_for: int | None = None       # games vencidos pelo time
-    score_against: int | None = None   # games vencidos pelo adversário
+    score_for: int | None = None
+    score_against: int | None = None
     tournament_name: str | None = None
     league_name: str | None = None
 
 
 class TeamHistory(BaseModel):
-    """Histórico recente de um time: forma + lista de resultados."""
-
     team_id: int
     team_name: str | None = None
     matches: list[MatchResult] = Field(default_factory=list)
@@ -109,11 +122,6 @@ class TeamHistory(BaseModel):
 
 
 class HeadToHead(BaseModel):
-    """
-    Histórico de confrontos diretos entre dois times.
-    Os resultados em matches são da perspectiva do team_a.
-    """
-
     team_a_id: int
     team_a_name: str | None = None
     team_b_id: int
@@ -153,9 +161,13 @@ class MatchContext(BaseModel):
     teams: list[TeamRef] = Field(default_factory=list)
     official_rosters: list[OfficialRosterSnapshot] = Field(default_factory=list)
 
-    # Campos de histórico — default vazio para não quebrar JSONs antigos
     team_histories: list[TeamHistory] = Field(default_factory=list)
     head_to_head: HeadToHead | None = None
+
+    # Enriquecimento Liquipedia — default disabled para não quebrar JSONs antigos
+    liquipedia_enrichment: LiquipediaEnrichment = Field(
+        default_factory=LiquipediaEnrichment
+    )
 
     stats: dict[str, Any] = Field(default_factory=dict)
     riot_enrichment: RiotEnrichment = Field(default_factory=RiotEnrichment)

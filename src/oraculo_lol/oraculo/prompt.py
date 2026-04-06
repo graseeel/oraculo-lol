@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ..models.context import MatchContext, TeamHistory
+from ..models.context import LiquipediaEnrichment, MatchContext, TeamHistory
 
 SYSTEM_PROMPT = """\
 Você é o Oráculo do LoL — o maior hype man do cenário brasileiro de League of Legends.
@@ -25,6 +25,7 @@ Regras para o reasoning:
 - Escreva em português brasileiro corrido, sem bullet points
 - O número máximo de caracteres será informado na mensagem do usuário — respeite exatamente
 - Use dados reais fornecidos para embasar a análise
+- Se houver dados de picks/bans, priorize análise da draft sobre forma recente
 - Termos em inglês permitidos apenas quando forem jargão consolidado do cenário: "stomp", "diff", "carry", "feed"
 - Nunca use "miracle run", "missão impossível" ou expressões genéricas de hype
 - Se a diferença for grande, pode dizer que será um stomp. Se for equilibrado, diga que é um jogo difícil de prever
@@ -40,6 +41,35 @@ def _fmt_winrate(history: TeamHistory) -> str:
     wr = history.winrate
     pct = f"{wr * 100:.0f}%" if wr is not None else "?"
     return f"{history.wins}V {history.losses}D ({pct} de vitórias)"
+
+
+def _fmt_liquipedia(enrichment: LiquipediaEnrichment) -> str | None:
+    """
+    Formata a seção de picks/bans da Liquipedia para o prompt.
+    Retorna None se não houver dados disponíveis.
+    """
+    if enrichment.status != "ok" or not enrichment.teams:
+        return None
+
+    lines: list[str] = ["## Draft (Picks e Bans)\n"]
+
+    for team in enrichment.teams:
+        lines.append(f"**{team.name}**")
+
+        if team.bans:
+            lines.append(f"Bans: {', '.join(team.bans)}")
+
+        if team.players:
+            for p in team.players:
+                role = f" ({p.role})" if p.role else ""
+                champion = f" → {p.champion}" if p.champion else ""
+                lines.append(f"  {p.name}{role}{champion}")
+        elif team.picks:
+            lines.append(f"Picks: {', '.join(team.picks)}")
+
+        lines.append("")
+
+    return "\n".join(lines)
 
 
 def build_prompt(ctx: MatchContext, max_reasoning_chars: int) -> str:
@@ -86,6 +116,11 @@ def build_prompt(ctx: MatchContext, max_reasoning_chars: int) -> str:
             else:
                 lines.append("_(roster não disponível)_")
             lines.append("")
+
+    # --- Draft Liquipedia (quando disponível) ---
+    draft_section = _fmt_liquipedia(ctx.liquipedia_enrichment)
+    if draft_section:
+        lines.append(draft_section)
 
     # --- Histórico individual ---
     if ctx.team_histories:

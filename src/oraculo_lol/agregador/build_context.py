@@ -7,6 +7,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from ..datasources.liquipedia import (
+    LiquipediaError,
+    extract_picks_bans,
+    find_match_by_teams,
+    from_env as liquipedia_from_env,
+)
 from ..datasources.pandascore import (
     PandascoreClient,
     from_env as pandascore_from_env,
@@ -17,6 +23,9 @@ from ..datasources.pandascore import (
 from ..models.context import (
     HeadToHead,
     LeagueRef,
+    LiquipediaEnrichment,
+    LiquipediaPlayerDraft,
+    LiquipediaTeamDraft,
     MatchContext,
     MatchResult,
     OfficialRosterSnapshot,
@@ -82,21 +91,17 @@ def _winner_id(match: dict[str, Any]) -> int | None:
 
 
 def _scores_for_team(match: dict[str, Any], team_id: int) -> tuple[int | None, int | None]:
-    """Retorna (score_for, score_against) da perspectiva do team_id."""
     results = match.get("results")
     if not isinstance(results, list) or len(results) < 2:
         return None, None
-
     score_map: dict[int, int] = {}
     for r in results:
         if isinstance(r, dict) and isinstance(r.get("team"), dict) and "score" in r:
             tid = r["team"].get("id")
             if tid is not None:
                 score_map[int(tid)] = int(r["score"])
-
     if not score_map:
         return None, None
-
     score_for = score_map.get(team_id)
     others = [s for tid, s in score_map.items() if tid != team_id]
     score_against = others[0] if others else None
@@ -104,7 +109,6 @@ def _scores_for_team(match: dict[str, Any], team_id: int) -> tuple[int | None, i
 
 
 def _opponent_of(match: dict[str, Any], team_id: int) -> tuple[int | None, str | None]:
-    """Retorna (id, name) do adversário do team_id nesse match."""
     for opp in (match.get("opponents") or []):
         if not isinstance(opp, dict):
             continue
@@ -118,22 +122,18 @@ def _opponent_of(match: dict[str, Any], team_id: int) -> tuple[int | None, str |
 
 
 def _match_to_result(match: dict[str, Any], team_id: int) -> MatchResult:
-    """Converte um dict de match Pandascore em MatchResult da perspectiva do team_id."""
     winner_id = _winner_id(match)
     won: bool | None = None
     if winner_id is not None:
         won = (winner_id == team_id)
-
     score_for, score_against = _scores_for_team(match, team_id)
     opp_id, opp_name = _opponent_of(match, team_id)
-
     tournament_name: str | None = None
     league_name: str | None = None
     if isinstance(match.get("tournament"), dict):
         tournament_name = match["tournament"].get("name")
     if isinstance(match.get("league"), dict):
         league_name = match["league"].get("name")
-
     return MatchResult(
         match_id=int(match["id"]),
         date=_parse_dt(match.get("begin_at")),
@@ -148,7 +148,6 @@ def _match_to_result(match: dict[str, Any], team_id: int) -> MatchResult:
 
 
 def _build_team_history(team: TeamRef, last_n: int = 10) -> TeamHistory:
-    """Fail-safe: erros retornam histórico vazio."""
     try:
         raw_matches = lol_team_past_matches(team_id=team.id, last_n=last_n)
         results = [_match_to_result(m, team.id) for m in raw_matches]
@@ -160,7 +159,6 @@ def _build_team_history(team: TeamRef, last_n: int = 10) -> TeamHistory:
 
 
 def _build_head_to_head(team_a: TeamRef, team_b: TeamRef, last_n: int = 10) -> HeadToHead:
-    """Fail-safe: erros retornam H2H sem partidas."""
     try:
         raw_matches = lol_head_to_head(team_a_id=team_a.id, team_b_id=team_b.id, last_n=last_n)
         results = [_match_to_result(m, team_a.id) for m in raw_matches]
@@ -177,6 +175,79 @@ def _build_head_to_head(team_a: TeamRef, team_b: TeamRef, last_n: int = 10) -> H
             team_b_id=team_b.id, team_b_name=team_b.name,
             matches=[],
         )
+
+
+def _build_liquipedia_enrichment(
+    teams: list[TeamRef],
+    begin_at: datetime | None,
+    *,
+    include_raw: bool = False,
+) -> LiquipediaEnrichment:
+    """
+    Tenta enriquecer o contexto com picks/bans da Liquipedia.
+    Fail-safe: retorna LiquipediaEnrichment(status="disabled") se a chave não estiver configurada,
+    ou status="not_found"/"error" em outros casos de falha.
+    """
+    from ..settings import load_settings
+    s = load_settings()
+    if not s.liquipedia_api_key:
+        logger.debug("LIQUIPEDIA_API_KEY não configurada — enriquecimento ignorado")
+        return LiquipediaEnrichment(status="disabled")
+
+    if len(teams) != 2 or begin_at is None:
+        return LiquipediaEnrichment(status="disabled")
+
+    try:
+        match = find_match_by_teams(
+            team_a_name=teams[0].name or "",
+            team_b_name=teams[1].name or "",
+            match_date=begin_at,
+        )
+
+        if match is None:
+            logger.info(
+                "liquipedia: partida não encontrada para %s vs %s",
+                teams[0].name, teams[1].name,
+            )
+            return LiquipediaEnrichment(status="not_found")
+
+        raw_draft = extract_picks_bans(match)
+        if not raw_draft or not raw_draft.get("teams"):
+            return LiquipediaEnrichment(
+                status="not_found",
+                raw=raw_draft if include_raw else None,
+            )
+
+        team_drafts = []
+        for t in raw_draft["teams"]:
+            players = [
+                LiquipediaPlayerDraft(
+                    name=p.get("name", ""),
+                    champion=p.get("champion") or None,
+                    role=p.get("role") or None,
+                )
+                for p in (t.get("players") or [])
+            ]
+            team_drafts.append(LiquipediaTeamDraft(
+                name=t.get("name", ""),
+                picks=t.get("picks", []),
+                bans=t.get("bans", []),
+                players=players,
+            ))
+
+        logger.info(
+            "liquipedia: enriquecimento OK para %s vs %s",
+            teams[0].name, teams[1].name,
+        )
+        return LiquipediaEnrichment(
+            status="ok",
+            teams=team_drafts,
+            raw=raw_draft if include_raw else None,
+        )
+
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("liquipedia: falha no enriquecimento err=%r", exc)
+        return LiquipediaEnrichment(status="error")
 
 
 def build_match_context(*, pandascore_match_id: int, include_payloads: bool = True) -> MatchContext:
@@ -215,24 +286,31 @@ def build_match_context(*, pandascore_match_id: int, include_payloads: bool = Tr
             )
         )
 
-    # Histórico individual (fail-safe por time)
-    # Sleep entre chamadas para respeitar rate limit do plano Free da Pandascore
+    # Histórico individual
     team_histories: list[TeamHistory] = []
     for i, t in enumerate(teams):
         if i > 0:
             time.sleep(2)
         team_histories.append(_build_team_history(t))
 
-    # Head-to-Head (só com exatamente 2 times)
+    # Head-to-Head
     head_to_head: HeadToHead | None = None
     if len(teams) == 2:
         time.sleep(2)
         head_to_head = _build_head_to_head(teams[0], teams[1])
 
+    # Enriquecimento Liquipedia (fail-safe)
+    begin_at = _parse_dt(match.get("begin_at"))
+    liquipedia_enrichment = _build_liquipedia_enrichment(
+        teams,
+        begin_at,
+        include_raw=include_payloads,
+    )
+
     return MatchContext(
         created_at=fetched_at,
         pandascore_match_id=int(match["id"]),
-        begin_at=_parse_dt(match.get("begin_at")),
+        begin_at=begin_at,
         number_of_games=match.get("number_of_games"),
         league=_league_ref(match["league"]) if isinstance(match.get("league"), dict) else None,
         serie=_serie_ref(match["serie"]) if isinstance(match.get("serie"), dict) else None,
@@ -243,6 +321,7 @@ def build_match_context(*, pandascore_match_id: int, include_payloads: bool = Tr
         official_rosters=official_rosters,
         team_histories=team_histories,
         head_to_head=head_to_head,
+        liquipedia_enrichment=liquipedia_enrichment,
         stats={},
         source_payloads={"pandascore.match": match} if include_payloads else {},
     )
