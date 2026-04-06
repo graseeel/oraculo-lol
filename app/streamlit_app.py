@@ -666,16 +666,26 @@ with tab3:
 with tab4:
     st.markdown("### Logs do Scheduler")
 
-    col_l1, col_l2, col_l3 = st.columns([1, 1, 2])
+    col_l1, col_l2, col_l3, col_l4 = st.columns([1, 1, 1, 1])
     with col_l1:
         n_lines = st.selectbox("Últimas linhas", [50, 100, 200, 500], index=1, label_visibility="visible")
     with col_l2:
         level_filter = st.selectbox("Nível", ["Todos", "INFO", "WARNING", "ERROR"], index=0)
     with col_l3:
+        auto_refresh = st.selectbox("Auto-refresh", ["Desligado", "5s", "10s", "30s"], index=0)
+    with col_l4:
         st.markdown("<div style='margin-top:26px;'></div>", unsafe_allow_html=True)
-        if st.button("🔄 Atualizar logs"):
+        if st.button("🔄 Atualizar agora"):
             st.cache_data.clear()
             st.rerun()
+
+    # Auto-refresh
+    if auto_refresh != "Desligado":
+        interval = int(auto_refresh.replace("s", ""))
+        st.caption(f"🔁 Atualizando a cada {auto_refresh}...")
+        time.sleep(interval)
+        st.cache_data.clear()
+        st.rerun()
 
     lines = get_log_lines(n=int(n_lines))
 
