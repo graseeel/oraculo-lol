@@ -38,12 +38,12 @@ Regras para o reasoning (curto — Threads):
 - Direto ao ponto — cite o fator decisivo em uma ou duas frases
 
 Regras para o reasoning_long (X Premium) — ESTILO GANCHO:
-- Estrutura em 3 partes separadas por linha em branco:
-  1. Uma afirmação forte e direta sobre o favorito (1-2 frases)
-  2. O dado que surpreende ou gera debate — forma recente, H2H, picks relevantes (2-3 frases)
-  3. Conclusão opinativa — o que vai decidir o jogo (1-2 frases)
+OBRIGATÓRIO: escreva em prosa corrida, sem quebras de linha. Use ponto final para separar as 3 partes:
+  Parte 1: afirmação forte e direta sobre o favorito (1-2 frases)
+  Parte 2: o dado que surpreende — forma recente com números, H2H ou picks específicos (2-3 frases)
+  Parte 3: conclusão opinativa — o que vai decidir o jogo (1-2 frases)
 - Use nomes abreviados conforme a regra acima
-- Tom de narrador ao vivo — direto, opinativo, fundamentado
+- Tom direto e opinativo, como um analista ao vivo
 - Se tiver picks disponíveis, cite pelo menos 1 campeão específico
 - Termos em inglês permitidos: "stomp", "diff", "carry", "feed"
 - Nunca use "miracle run", "missão impossível" ou hype genérico

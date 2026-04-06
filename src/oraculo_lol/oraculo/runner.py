@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +32,30 @@ def _default_context_path(match_id: int) -> Path:
     return s.abs_data_dir() / "context" / f"pandascore_match_{match_id}.json"
 
 
+def _sanitize_json_strings(text: str) -> str:
+    """
+    Remove newlines literais dentro de valores de string JSON.
+    O GPT às vezes coloca quebras de linha reais dentro das strings,
+    o que invalida o JSON. Esta função substitui por \\n escapado.
+    """
+    result = []
+    in_string = False
+    i = 0
+    while i < len(text):
+        ch = text[i]
+        if ch == '"' and (i == 0 or text[i-1] != '\\'):
+            in_string = not in_string
+            result.append(ch)
+        elif in_string and ch == '\n':
+            result.append('\\n')
+        elif in_string and ch == '\r':
+            result.append('\\r')
+        else:
+            result.append(ch)
+        i += 1
+    return ''.join(result)
+
+
 def _parse_llm_response(raw: str, match_id: int, model: str) -> Prediction:
     cleaned = raw.strip()
     if cleaned.startswith("```"):
@@ -38,6 +63,9 @@ def _parse_llm_response(raw: str, match_id: int, model: str) -> Prediction:
         cleaned = "\n".join(
             line for line in lines if not line.startswith("```")
         ).strip()
+
+    # Sanitiza newlines literais dentro de strings JSON
+    cleaned = _sanitize_json_strings(cleaned)
 
     try:
         data: dict[str, Any] = json.loads(cleaned)
@@ -74,11 +102,6 @@ def _parse_llm_response(raw: str, match_id: int, model: str) -> Prediction:
 
 
 def _calc_reasoning_limits(ctx: MatchContext) -> tuple[int, int]:
-    """
-    Retorna (max_reasoning_chars, max_reasoning_long_chars).
-    reasoning       → Threads (500 chars)
-    reasoning_long  → X Premium (1500 chars — valor fixo generoso)
-    """
     if len(ctx.teams) == 2:
         a, b = ctx.teams[0], ctx.teams[1]
         threads_limit = calc_available_chars(
@@ -136,21 +159,18 @@ def run_prediction(
 
     effective_match_id = ctx.pandascore_match_id
 
-    # --- Calcular limites dinâmicos ---
     max_reasoning_chars, max_reasoning_long_chars = _calc_reasoning_limits(ctx)
     logger.info(
         "limites de reasoning: threads=%d chars | twitter_long=%d chars | match_id=%s",
         max_reasoning_chars, max_reasoning_long_chars, effective_match_id,
     )
 
-    # --- Chamar LLM ---
     client = llm_from_env()
     logger.info("chamando LLM model=%s para match_id=%s", client.model, effective_match_id)
 
     user_msg = build_prompt(ctx, max_reasoning_chars, max_reasoning_long_chars)
     raw = client.chat(system=system_prompt(), user=user_msg, max_tokens=2048)
 
-    # --- Parsear resposta ---
     prediction = _parse_llm_response(raw, effective_match_id, client.model)
 
     if prediction.parse_error:
