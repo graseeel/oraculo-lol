@@ -284,7 +284,7 @@ st.divider()
 # ---------------------------------------------------------------------------
 # Abas
 # ---------------------------------------------------------------------------
-tab1, tab2, tab3, tab4 = st.tabs(["📊 Status", "🎮 Partidas", "🔮 Previsões", "📋 Logs"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Status", "🎮 Partidas", "🔮 Previsões", "📈 Performance", "📋 Logs"])
 
 
 # ============================================================================
@@ -661,9 +661,164 @@ with tab3:
 
 
 # ============================================================================
-# ABA 4 — LOGS
+# ABA 4 — PERFORMANCE
 # ============================================================================
 with tab4:
+    st.markdown("### Performance do Oráculo")
+
+    preds_all = get_predictions()
+    # Só previsões com resultado (prediction_correct não é None) e sem parse_error
+    with_result = [
+        p for p in preds_all
+        if p.get("prediction_correct") is not None and not p.get("parse_error")
+    ]
+
+    if not with_result:
+        st.info("Aguardando os primeiros resultados. Os dados aparecerão aqui após o término dos jogos.")
+    else:
+        total = len(with_result)
+        acertos = sum(1 for p in with_result if p.get("prediction_correct") is True)
+        erros = total - acertos
+        acuracia = acertos / total if total > 0 else 0
+
+        # --- Métricas gerais ---
+        c1, c2, c3, c4 = st.columns(4)
+        with c1:
+            st.markdown(f"""
+            <div class="metric-card">
+                <div class="metric-label">Acurácia Geral</div>
+                <div class="metric-value {'status-ok' if acuracia >= 0.6 else 'status-warn' if acuracia >= 0.4 else 'status-err'}">{acuracia*100:.0f}%</div>
+                <div class="metric-sub">{acertos} acertos de {total} jogos</div>
+            </div>
+            """, unsafe_allow_html=True)
+        with c2:
+            st.markdown(f"""
+            <div class="metric-card">
+                <div class="metric-label">Acertos</div>
+                <div class="metric-value status-ok">{acertos}</div>
+                <div class="metric-sub">previsões corretas</div>
+            </div>
+            """, unsafe_allow_html=True)
+        with c3:
+            st.markdown(f"""
+            <div class="metric-card">
+                <div class="metric-label">Erros</div>
+                <div class="metric-value status-err">{erros}</div>
+                <div class="metric-sub">previsões incorretas</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        # Sequência atual
+        with c4:
+            sorted_preds = sorted(with_result, key=lambda p: p.get("created_at") or "", reverse=True)
+            streak = 0
+            streak_type = None
+            for p in sorted_preds:
+                correct = p.get("prediction_correct")
+                if streak_type is None:
+                    streak_type = correct
+                if correct == streak_type:
+                    streak += 1
+                else:
+                    break
+            streak_label = f"{streak}x ✅" if streak_type else f"{streak}x ❌"
+            streak_color = "status-ok" if streak_type else "status-err"
+            st.markdown(f"""
+            <div class="metric-card">
+                <div class="metric-label">Sequência Atual</div>
+                <div class="metric-value {streak_color}">{streak_label}</div>
+                <div class="metric-sub">{'acertos' if streak_type else 'erros'} consecutivos</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        st.markdown("---")
+
+        # --- Acurácia por liga ---
+        col_l, col_c = st.columns(2)
+
+        with col_l:
+            st.markdown("#### Por Liga")
+            leagues: dict[str, list[bool]] = {}
+            for p in with_result:
+                liga = p.get("league_name") or "Outras"
+                leagues.setdefault(liga, []).append(bool(p.get("prediction_correct")))
+
+            league_rows = []
+            for liga, results in sorted(leagues.items()):
+                total_l = len(results)
+                acertos_l = sum(results)
+                league_rows.append({
+                    "Liga": liga,
+                    "Jogos": total_l,
+                    "Acertos": acertos_l,
+                    "Erros": total_l - acertos_l,
+                    "Acurácia": f"{acertos_l/total_l*100:.0f}%",
+                })
+            if league_rows:
+                st.dataframe(
+                    pd.DataFrame(league_rows),
+                    hide_index=True,
+                    use_container_width=True,
+                )
+
+        # --- Acurácia por confiança ---
+        with col_c:
+            st.markdown("#### Por Confiança")
+            conf_map: dict[str, list[bool]] = {}
+            for p in with_result:
+                conf = (p.get("confidence") or "indefinida").lower()
+                conf_map.setdefault(conf, []).append(bool(p.get("prediction_correct")))
+
+            conf_order = ["alta", "média", "baixa", "indefinida"]
+            conf_rows = []
+            for conf in conf_order:
+                if conf not in conf_map:
+                    continue
+                results = conf_map[conf]
+                total_c = len(results)
+                acertos_c = sum(results)
+                conf_rows.append({
+                    "Confiança": conf.capitalize(),
+                    "Jogos": total_c,
+                    "Acertos": acertos_c,
+                    "Erros": total_c - acertos_c,
+                    "Acurácia": f"{acertos_c/total_c*100:.0f}%",
+                })
+            if conf_rows:
+                st.dataframe(
+                    pd.DataFrame(conf_rows),
+                    hide_index=True,
+                    use_container_width=True,
+                )
+
+        # --- Histórico detalhado ---
+        st.markdown("#### Histórico de Resultados")
+        hist_rows = []
+        for p in sorted_preds:
+            teams = p.get("teams", [])
+            matchup = " vs ".join(t.get("name", "?") for t in teams) if teams else f"Match #{p.get('pandascore_match_id')}"
+            correct = p.get("prediction_correct")
+            hist_rows.append({
+                "Partida": matchup,
+                "Previsto": p.get("predicted_winner") or "?",
+                "Real": p.get("actual_winner") or "?",
+                "Confiança": (p.get("confidence") or "?").capitalize(),
+                "Liga": p.get("league_name") or "?",
+                "Resultado": "✅ Acerto" if correct is True else "❌ Erro",
+                "Data": (p.get("created_at") or "")[:10],
+            })
+        if hist_rows:
+            st.dataframe(
+                pd.DataFrame(hist_rows),
+                hide_index=True,
+                use_container_width=True,
+            )
+
+
+# ============================================================================
+# ABA 5 — LOGS
+# ============================================================================
+with tab5:
     st.markdown("### Logs do Scheduler")
 
     col_l1, col_l2, col_l3, col_l4 = st.columns([1, 1, 1, 1])

@@ -41,6 +41,11 @@ class Prediction(BaseModel):
     raw_response: str = ""
     parse_error: bool = False
 
+    # Resultado real — preenchido após o jogo terminar
+    actual_winner: str | None = None
+    prediction_correct: bool | None = None  # None = jogo ainda não terminou
+    league_name: str | None = None          # para filtro por liga na performance
+
 
 def save_prediction_json(prediction: Prediction) -> Path:
     s = load_settings()

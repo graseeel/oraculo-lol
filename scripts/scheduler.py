@@ -114,6 +114,49 @@ def _process_pregame(match: dict[str, Any]) -> None:
         )
 
 
+def _update_prediction_result(
+    match_id: int,
+    postgame: Any,
+    match: dict[str, Any],
+) -> None:
+    """Atualiza o arquivo de previsão com o resultado real após o jogo terminar."""
+    try:
+        from oraculo_lol.settings import load_settings
+        s = load_settings()
+        pred_path = s.abs_data_dir() / "predictions" / f"pandascore_match_{match_id}.json"
+        if not pred_path.exists():
+            return
+
+        pred_data = json.loads(pred_path.read_text(encoding="utf-8"))
+
+        # Vencedor real da série
+        actual_winner = None
+        if postgame.score_a > postgame.score_b:
+            actual_winner = postgame.team_a_name
+        elif postgame.score_b > postgame.score_a:
+            actual_winner = postgame.team_b_name
+
+        # Liga
+        league_name = None
+        if isinstance(match.get("league"), dict):
+            league_name = match["league"].get("name")
+
+        pred_data["actual_winner"] = actual_winner
+        pred_data["prediction_correct"] = postgame.prediction_correct
+        pred_data["league_name"] = league_name
+
+        pred_path.write_text(
+            json.dumps(pred_data, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        logger.info(
+            "resultado salvo na previsão match_id=%s correto=%s",
+            match_id, postgame.prediction_correct,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("falha ao salvar resultado na previsão match_id=%s err=%r", match_id, exc)
+
+
 def _process_postgame(match: dict[str, Any], state: dict[str, Any]) -> None:
     match_id = str(match.get("id"))
     name = match.get("name") or match_id
@@ -155,6 +198,13 @@ def _process_postgame(match: dict[str, Any], state: dict[str, Any]) -> None:
             tw = format_postgame_series(postgame)
             th = format_postgame_series(postgame)
             _post_both(tw, th, name)
+
+            # Salva resultado na previsão para métricas de performance
+            _update_prediction_result(
+                match_id=int(match_id),
+                postgame=postgame,
+                match=match,
+            )
 
             posted_series.append(match_id)
             _save_state(state)
