@@ -38,16 +38,22 @@ Regras para o reasoning (curto — Threads):
 - Direto ao ponto — cite o fator decisivo em uma ou duas frases
 
 Regras para o reasoning_long (X Premium) — ESTILO GANCHO:
-OBRIGATÓRIO: escreva em prosa corrida, sem quebras de linha. Use ponto final para separar as 3 partes:
-  Parte 1: afirmação forte e direta sobre o favorito (1-2 frases)
-  Parte 2: o dado que surpreende — forma recente com números, H2H ou picks específicos (2-3 frases)
-  Parte 3: conclusão opinativa — o que vai decidir o jogo (1-2 frases)
+OBRIGATÓRIO: escreva EXATAMENTE 3 partes separadas pelo marcador [P]. Não use quebras de linha reais.
+Formato obrigatório: "PARTE 1.[P]PARTE 2.[P]PARTE 3."
+
+  PARTE 1 — afirmação forte sobre o favorito (1-2 frases curtas e diretas)
+  PARTE 2 — dado que surpreende: número de aproveitamento, H2H ou campeão específico (2-3 frases)
+  PARTE 3 — conclusão opinativa: o que vai decidir (1-2 frases)
+
+Exemplo CORRETO:
+"RMD Gaming é favorita clara aqui.[P]INTZ está em queda livre com 20% de aproveitamento e perdeu para Red Academy e KaBuM!. A RMD tem Ryze e Seraphine como trunfo no mid.[P]Se RMD impuser pressão no early, o stomp é questão de tempo."
+
 - Use nomes abreviados conforme a regra acima
 - Tom direto e opinativo, como um analista ao vivo
 - Se tiver picks disponíveis, cite pelo menos 1 campeão específico
 - Termos em inglês permitidos: "stomp", "diff", "carry", "feed"
 - Nunca use "miracle run", "missão impossível" ou hype genérico
-- Respeite o limite de caracteres informado
+- Respeite o limite de caracteres informado (não conte os [P] no total)
 
 Regras gerais:
 - win_probability dos dois times deve somar 1.0

@@ -142,7 +142,9 @@ def format_for_twitter_long(prediction: Prediction) -> str:
     pa_str = f"{pa * 100:.0f}%" if pa is not None else "?"
     pb_str = f"{pb * 100:.0f}%" if pb is not None else "?"
 
-    reasoning = prediction.reasoning_long or prediction.reasoning or ""
+    raw_reasoning = prediction.reasoning_long or prediction.reasoning or ""
+    # Converte marcador [P] em parágrafos
+    reasoning = raw_reasoning.replace("[P]", "\n\n")
     tags = _hashtags()
 
     lines = [
