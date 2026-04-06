@@ -14,16 +14,43 @@ from ..settings import load_settings
 logger = logging.getLogger("oraculo_lol.datasources.liquipedia")
 
 WIKI = "leagueoflegends"
-BR_TOURNAMENT_SLUGS = ["CBLOL", "CBLOL Academy"]
+
+# Mapeamento de nomes Pandascore → Liquipedia (case-sensitive na Liquipedia)
+_PANDASCORE_TO_LIQUIPEDIA: dict[str, str] = {
+    "fluxo w7m": "Fluxo W7M",
+    "los grandes": "LOS",
+    "vivo keyd stars": "Keyd Stars",
+    "vivo keyd stars academy": "Keyd Stars Academy",
+    "red canids kalunga": "RED Canids",
+    "red canids": "RED Canids",
+    "furia esports": "FURIA",
+    "loud": "LOUD",
+    "leviatan esports": "Leviatan",
+    "leviatán": "Leviatan",
+    "pain gaming": "paiN Gaming",
+    "estral esports": "Estral Esports",
+    "kabum! e-sports": "KaBuM!",
+    "kabum! ilha das lendas": "KaBuM!",
+    "red academy": "RED Academy",
+    "vivo keyd academy": "Keyd Stars Academy",
+    "pain gaming academy": "paiN Academy",
+    "rmd gaming": "RMD Gaming",
+    "7rex": "7REX",
+    "7rex team": "7REX",
+    "ei nerd esports": "Ei Nerd Esports",
+    "intz e-sports": "INTZ",
+    "intz": "INTZ",
+    "team solid": "Team Solid",
+}
 
 
 class LiquipediaError(RuntimeError):
     pass
 
 
-def _normalize(s: str) -> str:
-    """Remove acentos e converte para lowercase para comparação."""
-    return unicodedata.normalize("NFD", s).encode("ascii", "ignore").decode().lower().strip()
+def _to_liquipedia_name(pandascore_name: str) -> str:
+    """Converte nome do Pandascore para o nome exato usado na Liquipedia."""
+    return _PANDASCORE_TO_LIQUIPEDIA.get(pandascore_name.lower(), pandascore_name)
 
 
 @dataclass(frozen=True)
@@ -105,124 +132,80 @@ def from_env() -> LiquipediaClient:
     return LiquipediaClient(api_key=s.liquipedia_api_key)
 
 
-def upcoming_br_matches(*, max_pages: int = 5) -> list[dict[str, Any]]:
-    client = from_env()
-    conditions = " OR ".join(
-        f'[[tournament_liquipediatier::premier]] AND [[tournament_name::{slug}::*]]'
-        for slug in BR_TOURNAMENT_SLUGS
-    )
-    return client.paginate(
-        "/match",
-        params={"conditions": conditions, "order": "date_start ASC"},
-        max_pages=max_pages,
-    )
-
-
-def team_by_name(*, team_name: str) -> dict[str, Any] | None:
-    client = from_env()
-    results = client.paginate(
-        "/team",
-        params={"conditions": f"[[name::{team_name}]]"},
-        limit=1,
-        max_pages=1,
-    )
-    return results[0] if results else None
-
-
-def players_by_team(*, team_name: str) -> list[dict[str, Any]]:
-    client = from_env()
-    return client.paginate(
-        "/player",
-        params={"conditions": f"[[team::{team_name}]] AND [[status::Active]]"},
-        max_pages=2,
-    )
-
-
-def tournament_by_name(*, name: str) -> dict[str, Any] | None:
-    client = from_env()
-    results = client.paginate(
-        "/tournament",
-        params={"conditions": f"[[name::{name}::*]]"},
-        limit=5,
-        max_pages=1,
-    )
-    return results[0] if results else None
-
-
 def find_match_by_teams(
     *,
     team_a_name: str,
     team_b_name: str,
     match_date: datetime,
-    tolerance_hours: int = 24,
+    tolerance_hours: int = 48,
 ) -> dict[str, Any] | None:
     """
     Busca uma partida na Liquipedia pelos nomes dos times e data aproximada.
-    Usa matching case-insensitive com normalização de acentos.
-    Retorna o match mais próximo em data dentro da janela de tolerância.
-    Fail-safe: retorna None se não encontrar ou se falhar.
+    Usa o mapeamento Pandascore→Liquipedia para garantir o nome correto.
+    Busca por `opponent` (case-sensitive na Liquipedia).
+    Fail-safe: retorna None se não encontrar ou falhar.
     """
     try:
         client = from_env()
 
-        # Janela de busca: ±tolerance_hours ao redor da data do match
-        date_from = (match_date - timedelta(hours=tolerance_hours)).strftime("%Y-%m-%d %H:%M:%S")
-        date_to = (match_date + timedelta(hours=tolerance_hours)).strftime("%Y-%m-%d %H:%M:%S")
+        liq_name_a = _to_liquipedia_name(team_a_name)
+        liq_name_b = _to_liquipedia_name(team_b_name)
 
-        conditions = f"[[date_start::>{date_from}]] AND [[date_start::<{date_to}]]"
-
+        # Busca matches do time A, filtra pelo time B e data localmente
         results = client.paginate(
             "/match",
             params={
-                "conditions": conditions,
-                "order": "date_start ASC",
+                "conditions": f"[[opponent::{liq_name_a}]]",
+                "order": "date DESC",
             },
             limit=50,
             max_pages=2,
         )
 
         if not results:
-            logger.debug("liquipedia: nenhuma partida encontrada na janela de %dh", tolerance_hours)
+            logger.debug("liquipedia: nenhum match encontrado para opponent=%s", liq_name_a)
             return None
 
-        a_norm = _normalize(team_a_name)
-        b_norm = _normalize(team_b_name)
-
+        tolerance_s = tolerance_hours * 3600
         best: dict[str, Any] | None = None
         best_delta: float = float("inf")
 
         for m in results:
-            opponents = m.get("match2opponents") or []
-            opp_names = [_normalize(o.get("name", "")) for o in opponents if isinstance(o, dict)]
-
-            # Verifica se ambos os times estão no match
-            a_found = any(a_norm in n or n in a_norm for n in opp_names)
-            b_found = any(b_norm in n or n in b_norm for n in opp_names)
-
-            if not (a_found and b_found):
+            # Verifica se o time B também está no match
+            opp_names = [
+                o.get("name", "") for o in (m.get("match2opponents") or [])
+                if isinstance(o, dict)
+            ]
+            if liq_name_b not in opp_names:
                 continue
 
-            # Calcula delta de tempo
-            date_str = m.get("date") or m.get("date_start")
-            if date_str:
-                try:
-                    match_dt = datetime.fromisoformat(str(date_str).replace(" ", "T"))
-                    if match_dt.tzinfo is None:
-                        match_dt = match_dt.replace(tzinfo=timezone.utc)
-                    delta = abs((match_dt - match_date.astimezone(timezone.utc)).total_seconds())
-                    if delta < best_delta:
-                        best_delta = delta
-                        best = m
-                except Exception:  # noqa: BLE001
-                    pass
+            # Verifica proximidade de data
+            date_str = m.get("date")
+            if not date_str:
+                continue
+
+            try:
+                match_dt = datetime.fromisoformat(str(date_str).replace(" ", "T"))
+                if match_dt.tzinfo is None:
+                    match_dt = match_dt.replace(tzinfo=timezone.utc)
+                delta = abs((match_dt - match_date.astimezone(timezone.utc)).total_seconds())
+
+                if delta <= tolerance_s and delta < best_delta:
+                    best_delta = delta
+                    best = m
+            except Exception:  # noqa: BLE001
+                pass
 
         if best:
             logger.info(
                 "liquipedia: match encontrado para %s vs %s (delta=%.0fs)",
-                team_a_name, team_b_name, best_delta,
+                liq_name_a, liq_name_b, best_delta,
             )
         else:
-            logger.debug("liquipedia: match não encontrado para %s vs %s", team_a_name, team_b_name)
+            logger.debug(
+                "liquipedia: match não encontrado para %s vs %s dentro de %dh",
+                liq_name_a, liq_name_b, tolerance_hours,
+            )
 
         return best
 
@@ -237,14 +220,17 @@ def find_match_by_teams(
 def extract_picks_bans(match: dict[str, Any]) -> dict[str, Any]:
     """
     Extrai picks e bans de um match da Liquipedia.
-    Retorna dict com estrutura:
+    Usa match2games[0].extradata.vetophase para o draft em ordem.
+    Usa match2games[0].participants para jogador + campeão + role.
+
+    Retorna:
     {
       "teams": [
         {
           "name": "RED Canids",
-          "picks": ["Azir", "Orianna", ...],
-          "bans": ["Zed", "LeBlanc", ...],
-          "players": [{"name": "Grevthar", "champion": "Azir", "role": "mid"}, ...]
+          "picks": ["Ambessa", "Pantheon", ...],
+          "bans": ["Jarvan IV", "Vi", ...],
+          "players": [{"name": "Zynts", "champion": "Ambessa", "role": "top"}, ...]
         },
         ...
       ]
@@ -253,51 +239,117 @@ def extract_picks_bans(match: dict[str, Any]) -> dict[str, Any]:
     """
     try:
         opponents = match.get("match2opponents") or []
-        teams = []
+        games = match.get("match2games") or []
 
-        for opp in opponents:
-            if not isinstance(opp, dict):
+        if not opponents or not games:
+            return {}
+
+        # Usa o primeiro game para extrair o draft
+        game = games[0]
+        extradata = game.get("extradata") or {}
+        participants = game.get("participants") or {}
+
+        team_names = [o.get("name", f"Time {i+1}") for i, o in enumerate(opponents)]
+
+        # Inicializa estrutura dos times
+        teams: list[dict[str, Any]] = [
+            {"name": name, "picks": [], "bans": [], "players": []}
+            for name in team_names
+        ]
+
+        # Extrai vetophase (draft em ordem)
+        vetophase = extradata.get("vetophase") or {}
+        if isinstance(vetophase, dict):
+            for _, entry in sorted(vetophase.items(), key=lambda x: int(x[0])):
+                if not isinstance(entry, dict):
+                    continue
+                team_idx = int(entry.get("team", 1)) - 1  # 1-indexed → 0-indexed
+                action_type = entry.get("type", "")
+                champion = entry.get("character", "")
+
+                if not champion or team_idx >= len(teams):
+                    continue
+
+                if action_type == "ban":
+                    teams[team_idx]["bans"].append(champion)
+                elif action_type == "pick":
+                    teams[team_idx]["picks"].append(champion)
+
+        # Extrai jogadores com campeão e role dos participants
+        # Chave: "{team_idx}_{position}" → 1-indexed para ambos
+        for key, p in participants.items():
+            if not isinstance(p, dict) or not p:
+                continue
+            try:
+                parts = str(key).split("_")
+                if len(parts) != 2:
+                    continue
+                team_idx = int(parts[0]) - 1  # 1-indexed → 0-indexed
+                if team_idx >= len(teams):
+                    continue
+                teams[team_idx]["players"].append({
+                    "name": p.get("displayName") or p.get("player", ""),
+                    "champion": p.get("character", ""),
+                    "role": p.get("role", ""),
+                    "kills": p.get("kills"),
+                    "deaths": p.get("deaths"),
+                    "assists": p.get("assists"),
+                })
+            except (ValueError, TypeError):
                 continue
 
-            team_name = opp.get("name", "?")
-            players_data = opp.get("match2players") or []
-            picks: list[str] = []
-            bans: list[str] = []
-            players: list[dict[str, str]] = []
-
-            for p in players_data:
-                if not isinstance(p, dict):
-                    continue
-                champion = p.get("champion") or p.get("char", "")
-                player_name = p.get("displayname") or p.get("name", "")
-                role = p.get("role", "")
-
-                if champion:
-                    picks.append(champion)
-                if player_name:
-                    players.append({
-                        "name": player_name,
-                        "champion": champion,
-                        "role": role,
-                    })
-
-            # Bans ficam no nível do match, não do opponent
-            # Tentamos extrair do campo extradata se disponível
-            extradata = opp.get("extradata") or {}
-            if isinstance(extradata, dict):
-                for k, v in extradata.items():
-                    if "ban" in k.lower() and v:
-                        bans.append(str(v))
-
-            teams.append({
-                "name": team_name,
-                "picks": picks,
-                "bans": bans,
-                "players": players,
-            })
-
-        return {"teams": teams} if teams else {}
+        return {"teams": teams}
 
     except Exception as exc:  # noqa: BLE001
         logger.warning("liquipedia: falha ao extrair picks/bans err=%r", exc)
         return {}
+
+
+def fetch_recent_drafts(
+    *,
+    team_a_name: str,
+    team_b_name: str,
+    last_n: int = 5,
+) -> dict[str, list[dict[str, Any]]]:
+    """
+    Busca os últimos N drafts de cada time separadamente.
+    Útil para análise de picks preferidos mesmo sem um H2H recente.
+    Retorna: {"team_a": [...drafts...], "team_b": [...drafts...]}
+    Fail-safe: retorna listas vazias em caso de erro.
+    """
+    result: dict[str, list[dict[str, Any]]] = {"team_a": [], "team_b": []}
+
+    try:
+        client = from_env()
+
+        for key, name in [("team_a", team_a_name), ("team_b", team_b_name)]:
+            liq_name = _to_liquipedia_name(name)
+            try:
+                matches = client.paginate(
+                    "/match",
+                    params={
+                        "conditions": f"[[opponent::{liq_name}]] AND [[finished::1]]",
+                        "order": "date DESC",
+                    },
+                    limit=last_n,
+                    max_pages=1,
+                )
+                for m in matches[:last_n]:
+                    draft = extract_picks_bans(m)
+                    if draft:
+                        result[key].append({
+                            "date": m.get("date"),
+                            "opponent": next(
+                                (o.get("name") for o in (m.get("match2opponents") or [])
+                                 if o.get("name") != liq_name),
+                                "?"
+                            ),
+                            "draft": draft,
+                        })
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("liquipedia: falha ao buscar drafts de %s err=%r", liq_name, exc)
+
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("liquipedia: erro em fetch_recent_drafts err=%r", exc)
+
+    return result
