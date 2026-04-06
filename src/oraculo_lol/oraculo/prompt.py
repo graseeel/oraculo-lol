@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ..models.context import LiquipediaEnrichment, MatchContext, TeamHistory
+from ..models.context import LiquipediaEnrichment, MatchContext, RecentDraft, TeamHistory
 
 SYSTEM_PROMPT = """\
 Você é o Oráculo do LoL — o maior hype man do cenário brasileiro de League of Legends.
@@ -24,11 +24,11 @@ O formato esperado é:
 Regras para o reasoning:
 - Escreva em português brasileiro corrido, sem bullet points
 - O número máximo de caracteres será informado na mensagem do usuário — respeite exatamente
-- Use dados reais fornecidos para embasar a análise
-- Se houver dados de picks/bans, priorize análise da draft sobre forma recente
-- Termos em inglês permitidos apenas quando forem jargão consolidado do cenário: "stomp", "diff", "carry", "feed"
+- Se houver draft do jogo específico, priorize análise da draft sobre forma recente
+- Se houver apenas histórico de picks, use para identificar padrões de composição
+- Termos em inglês permitidos quando forem jargão consolidado: "stomp", "diff", "carry", "feed"
 - Nunca use "miracle run", "missão impossível" ou expressões genéricas de hype
-- Se a diferença for grande, pode dizer que será um stomp. Se for equilibrado, diga que é um jogo difícil de prever
+- Se a diferença for grande, pode dizer que será um stomp. Se equilibrado, diga que é difícil prever
 - Se não houver dados suficientes, seja honesto e explique brevemente
 - win_probability dos dois times deve somar 1.0
 - Responda em português brasileiro
@@ -43,22 +43,16 @@ def _fmt_winrate(history: TeamHistory) -> str:
     return f"{history.wins}V {history.losses}D ({pct} de vitórias)"
 
 
-def _fmt_liquipedia(enrichment: LiquipediaEnrichment) -> str | None:
-    """
-    Formata a seção de picks/bans da Liquipedia para o prompt.
-    Retorna None se não houver dados disponíveis.
-    """
+def _fmt_draft_specific(enrichment: LiquipediaEnrichment) -> str | None:
+    """Formata seção de picks/bans do jogo específico (status='ok')."""
     if enrichment.status != "ok" or not enrichment.teams:
         return None
 
-    lines: list[str] = ["## Draft (Picks e Bans)\n"]
-
+    lines: list[str] = ["## Draft do Jogo (Picks e Bans)\n"]
     for team in enrichment.teams:
         lines.append(f"**{team.name}**")
-
         if team.bans:
             lines.append(f"Bans: {', '.join(team.bans)}")
-
         if team.players:
             for p in team.players:
                 role = f" ({p.role})" if p.role else ""
@@ -66,7 +60,48 @@ def _fmt_liquipedia(enrichment: LiquipediaEnrichment) -> str | None:
                 lines.append(f"  {p.name}{role}{champion}")
         elif team.picks:
             lines.append(f"Picks: {', '.join(team.picks)}")
+        lines.append("")
 
+    return "\n".join(lines)
+
+
+def _fmt_recent_draft(draft: RecentDraft, team_name: str) -> str:
+    """Formata um draft recente de um time específico."""
+    team_data = next(
+        (t for t in draft.teams if t.name == team_name),
+        draft.teams[0] if draft.teams else None,
+    )
+    if not team_data or not team_data.picks:
+        return ""
+
+    date_str = draft.date[:10] if draft.date else "?"
+    opp = draft.opponent or "?"
+    picks = ", ".join(team_data.picks)
+    bans = ", ".join(team_data.bans[:3]) if team_data.bans else "—"
+    return f"  vs {opp} ({date_str}): Picks: {picks} | Bans: {bans}"
+
+
+def _fmt_draft_recent(enrichment: LiquipediaEnrichment, ctx: MatchContext) -> str | None:
+    """Formata seção de histórico de picks por time (status='recent_only')."""
+    if enrichment.status != "recent_only" or not enrichment.recent_drafts:
+        return None
+
+    lines: list[str] = ["## Picks Recentes (últimas partidas)\n"]
+
+    team_names = [t.name or "" for t in ctx.teams]
+    keys = ["team_a", "team_b"]
+
+    for i, (key, team_name) in enumerate(zip(keys, team_names)):
+        drafts = enrichment.recent_drafts.get(key, [])
+        if not drafts:
+            lines.append(f"**{team_name}**: sem dados de picks recentes\n")
+            continue
+
+        lines.append(f"**{team_name}**")
+        for draft in drafts:
+            line = _fmt_recent_draft(draft, team_name)
+            if line:
+                lines.append(line)
         lines.append("")
 
     return "\n".join(lines)
@@ -117,10 +152,15 @@ def build_prompt(ctx: MatchContext, max_reasoning_chars: int) -> str:
                 lines.append("_(roster não disponível)_")
             lines.append("")
 
-    # --- Draft Liquipedia (quando disponível) ---
-    draft_section = _fmt_liquipedia(ctx.liquipedia_enrichment)
+    # --- Draft do jogo específico (partida passada com picks) ---
+    draft_section = _fmt_draft_specific(ctx.liquipedia_enrichment)
     if draft_section:
         lines.append(draft_section)
+
+    # --- Histórico de picks (partida futura) ---
+    recent_section = _fmt_draft_recent(ctx.liquipedia_enrichment, ctx)
+    if recent_section:
+        lines.append(recent_section)
 
     # --- Histórico individual ---
     if ctx.team_histories:

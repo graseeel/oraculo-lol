@@ -57,28 +57,39 @@ class RiotEnrichment(BaseModel):
 # ---------------------------------------------------------------------------
 
 class LiquipediaPlayerDraft(BaseModel):
-    """Jogador com campeão e role em um game específico."""
     name: str
     champion: str | None = None
     role: str | None = None
 
 
 class LiquipediaTeamDraft(BaseModel):
-    """Draft de um time em um game."""
     name: str
     picks: list[str] = Field(default_factory=list)
     bans: list[str] = Field(default_factory=list)
     players: list[LiquipediaPlayerDraft] = Field(default_factory=list)
 
 
+class RecentDraft(BaseModel):
+    """Draft de uma partida recente — usado como histórico de picks para jogos futuros."""
+    date: str | None = None
+    opponent: str | None = None
+    teams: list[LiquipediaTeamDraft] = Field(default_factory=list)
+
+
 class LiquipediaEnrichment(BaseModel):
     """
     Enriquecimento via Liquipedia — picks, bans e composições.
-    Fail-safe: status indica se os dados estão disponíveis.
+
+    status='ok'          → draft do jogo específico disponível (partida passada)
+    status='recent_only' → jogo futuro sem draft; recent_drafts tem histórico de picks
+    status='not_found'   → partida não encontrada na Liquipedia
+    status='disabled'    → chave não configurada
+    status='error'       → falha na API
     """
-    status: Literal["disabled", "not_found", "ok", "error"] = "disabled"
+    status: Literal["disabled", "not_found", "ok", "recent_only", "error"] = "disabled"
     teams: list[LiquipediaTeamDraft] = Field(default_factory=list)
-    raw: dict[str, Any] | None = None  # payload bruto para auditoria
+    recent_drafts: dict[str, list[RecentDraft]] = Field(default_factory=dict)
+    raw: dict[str, Any] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -164,12 +175,10 @@ class MatchContext(BaseModel):
     team_histories: list[TeamHistory] = Field(default_factory=list)
     head_to_head: HeadToHead | None = None
 
-    # Enriquecimento Liquipedia — default disabled para não quebrar JSONs antigos
     liquipedia_enrichment: LiquipediaEnrichment = Field(
         default_factory=LiquipediaEnrichment
     )
 
     stats: dict[str, Any] = Field(default_factory=dict)
     riot_enrichment: RiotEnrichment = Field(default_factory=RiotEnrichment)
-
     source_payloads: dict[str, Any] = Field(default_factory=dict)

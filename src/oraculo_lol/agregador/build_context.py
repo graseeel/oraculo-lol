@@ -10,8 +10,8 @@ from typing import Any
 from ..datasources.liquipedia import (
     LiquipediaError,
     extract_picks_bans,
+    fetch_recent_drafts,
     find_match_by_teams,
-    from_env as liquipedia_from_env,
 )
 from ..datasources.pandascore import (
     PandascoreClient,
@@ -29,6 +29,7 @@ from ..models.context import (
     MatchContext,
     MatchResult,
     OfficialRosterSnapshot,
+    RecentDraft,
     SerieRef,
     TeamHistory,
     TeamRef,
@@ -177,6 +178,47 @@ def _build_head_to_head(team_a: TeamRef, team_b: TeamRef, last_n: int = 10) -> H
         )
 
 
+def _has_picks(raw_draft: dict[str, Any]) -> bool:
+    """Verifica se o draft tem picks reais (não é um jogo futuro sem dados)."""
+    return any(
+        t.get("picks") for t in (raw_draft.get("teams") or [])
+    )
+
+
+def _parse_recent_drafts(
+    raw: dict[str, list[dict[str, Any]]]
+) -> dict[str, list[RecentDraft]]:
+    """Converte o output de fetch_recent_drafts em modelos RecentDraft."""
+    result: dict[str, list[RecentDraft]] = {}
+    for key, drafts in raw.items():
+        parsed = []
+        for d in drafts:
+            draft_data = d.get("draft") or {}
+            teams = []
+            for t in (draft_data.get("teams") or []):
+                players = [
+                    LiquipediaPlayerDraft(
+                        name=p.get("name", ""),
+                        champion=p.get("champion") or None,
+                        role=p.get("role") or None,
+                    )
+                    for p in (t.get("players") or [])
+                ]
+                teams.append(LiquipediaTeamDraft(
+                    name=t.get("name", ""),
+                    picks=t.get("picks", []),
+                    bans=t.get("bans", []),
+                    players=players,
+                ))
+            parsed.append(RecentDraft(
+                date=d.get("date"),
+                opponent=d.get("opponent"),
+                teams=teams,
+            ))
+        result[key] = parsed
+    return result
+
+
 def _build_liquipedia_enrichment(
     teams: list[TeamRef],
     begin_at: datetime | None,
@@ -184,11 +226,15 @@ def _build_liquipedia_enrichment(
     include_raw: bool = False,
 ) -> LiquipediaEnrichment:
     """
-    Tenta enriquecer o contexto com picks/bans da Liquipedia.
-    Fail-safe: retorna LiquipediaEnrichment(status="disabled") se a chave não estiver configurada,
-    ou status="not_found"/"error" em outros casos de falha.
+    Tenta enriquecer o contexto com dados da Liquipedia.
+
+    Estratégia:
+    1. Busca o match específico pelo nome dos times e data
+    2. Se encontrado COM picks → status='ok' (partida passada com draft)
+    3. Se encontrado SEM picks → partida futura → busca histórico recente de picks
+    4. Se não encontrado → busca histórico recente de picks como fallback
+    5. Qualquer falha → fail-safe, retorna status='error'/'disabled'
     """
-    from ..settings import load_settings
     s = load_settings()
     if not s.liquipedia_api_key:
         logger.debug("LIQUIPEDIA_API_KEY não configurada — enriquecimento ignorado")
@@ -197,53 +243,77 @@ def _build_liquipedia_enrichment(
     if len(teams) != 2 or begin_at is None:
         return LiquipediaEnrichment(status="disabled")
 
+    team_a_name = teams[0].name or ""
+    team_b_name = teams[1].name or ""
+
     try:
+        # --- Passo 1: busca o match específico ---
         match = find_match_by_teams(
-            team_a_name=teams[0].name or "",
-            team_b_name=teams[1].name or "",
+            team_a_name=team_a_name,
+            team_b_name=team_b_name,
             match_date=begin_at,
         )
 
-        if match is None:
-            logger.info(
-                "liquipedia: partida não encontrada para %s vs %s",
-                teams[0].name, teams[1].name,
-            )
-            return LiquipediaEnrichment(status="not_found")
+        if match is not None:
+            raw_draft = extract_picks_bans(match)
 
-        raw_draft = extract_picks_bans(match)
-        if not raw_draft or not raw_draft.get("teams"):
-            return LiquipediaEnrichment(
-                status="not_found",
-                raw=raw_draft if include_raw else None,
-            )
-
-        team_drafts = []
-        for t in raw_draft["teams"]:
-            players = [
-                LiquipediaPlayerDraft(
-                    name=p.get("name", ""),
-                    champion=p.get("champion") or None,
-                    role=p.get("role") or None,
+            # --- Passo 2: match com picks reais (partida passada) ---
+            if raw_draft and _has_picks(raw_draft):
+                team_drafts = []
+                for t in raw_draft["teams"]:
+                    players = [
+                        LiquipediaPlayerDraft(
+                            name=p.get("name", ""),
+                            champion=p.get("champion") or None,
+                            role=p.get("role") or None,
+                        )
+                        for p in (t.get("players") or [])
+                    ]
+                    team_drafts.append(LiquipediaTeamDraft(
+                        name=t.get("name", ""),
+                        picks=t.get("picks", []),
+                        bans=t.get("bans", []),
+                        players=players,
+                    ))
+                logger.info(
+                    "liquipedia: draft específico OK para %s vs %s",
+                    team_a_name, team_b_name,
                 )
-                for p in (t.get("players") or [])
-            ]
-            team_drafts.append(LiquipediaTeamDraft(
-                name=t.get("name", ""),
-                picks=t.get("picks", []),
-                bans=t.get("bans", []),
-                players=players,
-            ))
+                return LiquipediaEnrichment(
+                    status="ok",
+                    teams=team_drafts,
+                    raw=raw_draft if include_raw else None,
+                )
+
+        # --- Passo 3 e 4: sem picks → busca histórico recente ---
+        logger.info(
+            "liquipedia: sem draft específico para %s vs %s — buscando histórico",
+            team_a_name, team_b_name,
+        )
+        raw_recent = fetch_recent_drafts(
+            team_a_name=team_a_name,
+            team_b_name=team_b_name,
+            last_n=3,
+        )
+
+        recent = _parse_recent_drafts(raw_recent)
+        has_any = any(recent.values())
+
+        if has_any:
+            logger.info(
+                "liquipedia: histórico recente OK para %s (%d) e %s (%d)",
+                team_a_name, len(recent.get("team_a", [])),
+                team_b_name, len(recent.get("team_b", [])),
+            )
+            return LiquipediaEnrichment(
+                status="recent_only",
+                recent_drafts=recent,
+            )
 
         logger.info(
-            "liquipedia: enriquecimento OK para %s vs %s",
-            teams[0].name, teams[1].name,
+            "liquipedia: sem dados para %s vs %s", team_a_name, team_b_name
         )
-        return LiquipediaEnrichment(
-            status="ok",
-            teams=team_drafts,
-            raw=raw_draft if include_raw else None,
-        )
+        return LiquipediaEnrichment(status="not_found")
 
     except Exception as exc:  # noqa: BLE001
         logger.warning("liquipedia: falha no enriquecimento err=%r", exc)
@@ -269,7 +339,6 @@ def build_match_context(*, pandascore_match_id: int, include_payloads: bool = Tr
 
     fetched_at = datetime.now(timezone.utc)
 
-    # Rosters
     for t in teams:
         raw_players = _fetch_team_players(client, t.id)
         players = [
@@ -286,20 +355,17 @@ def build_match_context(*, pandascore_match_id: int, include_payloads: bool = Tr
             )
         )
 
-    # Histórico individual
     team_histories: list[TeamHistory] = []
     for i, t in enumerate(teams):
         if i > 0:
             time.sleep(2)
         team_histories.append(_build_team_history(t))
 
-    # Head-to-Head
     head_to_head: HeadToHead | None = None
     if len(teams) == 2:
         time.sleep(2)
         head_to_head = _build_head_to_head(teams[0], teams[1])
 
-    # Enriquecimento Liquipedia (fail-safe)
     begin_at = _parse_dt(match.get("begin_at"))
     liquipedia_enrichment = _build_liquipedia_enrichment(
         teams,
