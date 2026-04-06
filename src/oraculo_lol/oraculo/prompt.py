@@ -19,22 +19,35 @@ O formato esperado é:
     {"name": "<time B>", "win_probability": <0.0 a 1.0>}
   ],
   "reasoning": "<análise curta para Threads — limite informado na mensagem>",
-  "reasoning_long": "<análise detalhada para o X — limite informado na mensagem>"
+  "reasoning_long": "<análise estilo gancho para o X — limite informado na mensagem>"
 }
+
+REGRA CRÍTICA — NOMES DOS TIMES:
+Sempre use os nomes abreviados nos reasonings. Exemplos:
+- "RMD Gaming" (nunca "RMD e-Sports")
+- "INTZ" (nunca "INTZ e-Sports")  
+- "Red Canids" (nunca "RED Canids Kalunga")
+- "Fluxo" (nunca "Fluxo W7M")
+- "Vivo Keyd" (nunca "Vivo Keyd Stars" ou "Vivo Keyd Stars Academy")
+- "Pain Academy", "Red Academy", "Vivo Academy" (manter Academy quando for divisão secundária)
+- "Furia", "Loud", "LOS", "Leviatan", "Pain Gaming" para os demais times do CBLOL
 
 Regras para o reasoning (curto — Threads):
 - Português brasileiro corrido, sem bullet points
 - Respeite o limite de caracteres informado
-- Direto ao ponto — cite o fator decisivo
+- Direto ao ponto — cite o fator decisivo em uma ou duas frases
 
-Regras para o reasoning_long (X Premium):
-- Português brasileiro corrido, sem bullet points
-- Respeite o limite de caracteres informado
-- Pode citar campeões específicos dos picks se disponíveis
-- Mencione forma recente, H2H e o fator decisivo
-- Tom de narrador ao vivo — energia, mas fundamentado em dados
+Regras para o reasoning_long (X Premium) — ESTILO GANCHO:
+- Estrutura em 3 partes separadas por linha em branco:
+  1. Uma afirmação forte e direta sobre o favorito (1-2 frases)
+  2. O dado que surpreende ou gera debate — forma recente, H2H, picks relevantes (2-3 frases)
+  3. Conclusão opinativa — o que vai decidir o jogo (1-2 frases)
+- Use nomes abreviados conforme a regra acima
+- Tom de narrador ao vivo — direto, opinativo, fundamentado
+- Se tiver picks disponíveis, cite pelo menos 1 campeão específico
 - Termos em inglês permitidos: "stomp", "diff", "carry", "feed"
 - Nunca use "miracle run", "missão impossível" ou hype genérico
+- Respeite o limite de caracteres informado
 
 Regras gerais:
 - win_probability dos dois times deve somar 1.0
@@ -113,7 +126,6 @@ def _fmt_draft_recent(enrichment: LiquipediaEnrichment, ctx: MatchContext) -> st
 def build_prompt(ctx: MatchContext, max_reasoning_chars: int, max_reasoning_long_chars: int = 1500) -> str:
     lines: list[str] = []
 
-    # --- Instruções de limite ---
     if max_reasoning_chars > 0:
         lines.append(
             f"⚠️ LIMITE reasoning (Threads): até {max_reasoning_chars} caracteres.\n"
@@ -126,7 +138,6 @@ def build_prompt(ctx: MatchContext, max_reasoning_chars: int, max_reasoning_long
             f"⚠️ LIMITE reasoning_long (X): até {max_reasoning_long_chars} caracteres.\n"
         )
 
-    # --- Cabeçalho ---
     lines.append("## Dados da Partida\n")
     if ctx.league:
         lines.append(f"Liga: {ctx.league.name or ctx.league.slug or ctx.league.id}")
@@ -144,7 +155,6 @@ def build_prompt(ctx: MatchContext, max_reasoning_chars: int, max_reasoning_long
     if team_names:
         lines.append(f"Times: {' vs '.join(team_names)}\n")
 
-    # --- Rosters ---
     if ctx.official_rosters:
         lines.append("## Rosters Oficiais\n")
         for roster in ctx.official_rosters:
@@ -156,17 +166,14 @@ def build_prompt(ctx: MatchContext, max_reasoning_chars: int, max_reasoning_long
                 lines.append("_(roster não disponível)_")
             lines.append("")
 
-    # --- Draft específico ---
     draft_section = _fmt_draft_specific(ctx.liquipedia_enrichment)
     if draft_section:
         lines.append(draft_section)
 
-    # --- Picks históricos ---
     recent_section = _fmt_draft_recent(ctx.liquipedia_enrichment, ctx)
     if recent_section:
         lines.append(recent_section)
 
-    # --- Histórico individual ---
     if ctx.team_histories:
         lines.append("## Forma Recente (últimas partidas)\n")
         for history in ctx.team_histories:
@@ -183,7 +190,6 @@ def build_prompt(ctx: MatchContext, max_reasoning_chars: int, max_reasoning_long
                 lines.append(f"  {date_str} {result_str} vs {opp}{score}{tournament}")
             lines.append("")
 
-    # --- Head-to-Head ---
     if ctx.head_to_head and ctx.head_to_head.total > 0:
         h2h = ctx.head_to_head
         a = h2h.team_a_name or str(h2h.team_a_id)

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from ..models.postgame import MatchPostGame
 from ..oraculo.prediction import Prediction
 
@@ -89,10 +91,7 @@ def _hashtags() -> str:
 
 
 def format_for_twitter(prediction: Prediction) -> str:
-    """
-    Post curto para compatibilidade — mantido para testes e fallback.
-    Limite: TWITTER_SHORT_LIMIT (280 chars).
-    """
+    """Post curto — compatibilidade e fallback. Limite: 280 chars."""
     header = _header(prediction)
     winner = _winner_line(prediction)
     tags = _hashtags()
@@ -115,10 +114,18 @@ def format_for_twitter(prediction: Prediction) -> str:
 
 def format_for_twitter_long(prediction: Prediction) -> str:
     """
-    Post longo para o X com Premium Basic.
-    Usa reasoning_long se disponível, senão usa reasoning.
-    Estrutura rica com seções separadas.
-    Limite: TWITTER_LIMIT (25000 chars).
+    Post longo para o X com Premium Basic — estilo gancho.
+
+    Estrutura:
+    ⚔️ TIME A vs TIME B — [data se disponível]
+
+    [reasoning_long em 3 partes: afirmação forte / dado surpresa / conclusão]
+
+    🔥 Previsão: VENCEDOR | CONFIANÇA
+    TIME A X% × Y% TIME B
+
+    #CBLOL #Circuitão #OráculoDoLoL
+    Dados: Pandascore & Liquipedia
     """
     a_name = _abbreviate(prediction.teams[0].name) if len(prediction.teams) >= 1 else "?"
     b_name = _abbreviate(prediction.teams[1].name) if len(prediction.teams) >= 2 else "?"
@@ -141,19 +148,11 @@ def format_for_twitter_long(prediction: Prediction) -> str:
     lines = [
         f"⚔️ {a_name} vs {b_name}",
         "",
-        f"{conf_emoji} Favorito: {winner} | {conf}",
+        reasoning,
+        "",
+        f"{conf_emoji} Previsão: {winner} | {conf}",
         f"{a_name} {pa_str} × {pb_str} {b_name}",
         "",
-    ]
-
-    if reasoning:
-        lines += [
-            "📝 Análise",
-            reasoning,
-            "",
-        ]
-
-    lines += [
         tags,
         "Dados: Pandascore & Liquipedia",
     ]
@@ -163,10 +162,7 @@ def format_for_twitter_long(prediction: Prediction) -> str:
 
 
 def format_for_threads(prediction: Prediction) -> str:
-    """
-    Post para o Threads com limite real de 500 chars.
-    Usa reasoning (curto) — mais conciso que o X long.
-    """
+    """Post para o Threads — limite real de 500 chars."""
     header = _header(prediction)
     winner = _winner_line(prediction)
     reasoning = prediction.reasoning or ""
