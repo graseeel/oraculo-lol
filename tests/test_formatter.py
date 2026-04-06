@@ -10,9 +10,11 @@ import pytest
 
 from oraculo_lol.publisher.formatter import (
     TWITTER_LIMIT,
+    TWITTER_SHORT_LIMIT,
     THREADS_LIMIT,
     _abbreviate,
     format_for_twitter,
+    format_for_twitter_long,
     format_for_threads,
 )
 from oraculo_lol.publisher.layout import calc_available_chars, MIN_REASONING_CHARS
@@ -30,6 +32,7 @@ def _make_prediction(
     winner: str = "RED Canids",
     confidence: str = "alta",
     reasoning: str = "Time com melhor forma recente.",
+    reasoning_long: str | None = None,
     prob_a: float = 0.65,
     prob_b: float = 0.35,
 ) -> Prediction:
@@ -39,11 +42,27 @@ def _make_prediction(
         predicted_winner=winner,
         confidence=confidence,
         reasoning=reasoning,
+        reasoning_long=reasoning_long,
         teams=[
             TeamPrediction(name=team_a, win_probability=prob_a),
             TeamPrediction(name=team_b, win_probability=prob_b),
         ],
     )
+
+
+# ---------------------------------------------------------------------------
+# Constantes
+# ---------------------------------------------------------------------------
+
+class TestConstantes:
+    def test_twitter_limit_e_25000(self):
+        assert TWITTER_LIMIT == 25000
+
+    def test_twitter_short_limit_e_280(self):
+        assert TWITTER_SHORT_LIMIT == 280
+
+    def test_threads_limit_e_500(self):
+        assert THREADS_LIMIT == 500
 
 
 # ---------------------------------------------------------------------------
@@ -79,7 +98,7 @@ class TestAbbreviate:
             "FURIA Esports": "Furia",
             "LOUD": "Loud",
             "Leviatán": "Leviatan",
-            "Leviatan Esports": "Leviatan",  # grafia alternativa do Pandascore
+            "Leviatan Esports": "Leviatan",
             "pain gaming": "Pain Gaming",
         }
         for entrada, esperado in casos.items():
@@ -89,17 +108,17 @@ class TestAbbreviate:
         casos = {
             "Estral Esports": "Estral Esports",
             "KaBuM! e-Sports": "KaBuM!",
-            "KaBuM! Ilha das Lendas": "KaBuM!",   # grafia do Pandascore
+            "KaBuM! Ilha das Lendas": "KaBuM!",
             "RED Academy": "Red Academy",
             "Vivo Keyd Academy": "Vivo Academy",
             "pain academy": "Pain Academy",
-            "paiN Gaming Academy": "Pain Academy", # grafia do Pandascore
+            "paiN Gaming Academy": "Pain Academy",
             "RMD Gaming": "RMD Gaming",
             "7Rex Team": "7Rex Team",
-            "7REX": "7Rex Team",                   # grafia do Pandascore
+            "7REX": "7Rex Team",
             "Ei Nerd Esports": "Ei Nerd Esports",
             "INTZ": "INTZ",
-            "INTZ e-Sports": "INTZ",               # grafia do Pandascore
+            "INTZ e-Sports": "INTZ",
             "Team Solid": "Team Solid",
         }
         for entrada, esperado in casos.items():
@@ -107,7 +126,7 @@ class TestAbbreviate:
 
 
 # ---------------------------------------------------------------------------
-# format_for_twitter
+# format_for_twitter (curto — legado/fallback, limite 280)
 # ---------------------------------------------------------------------------
 
 class TestFormatForTwitter:
@@ -116,10 +135,10 @@ class TestFormatForTwitter:
             team_a="Vivo Keyd Stars Academy",
             team_b="Ei Nerd Esports",
             winner="Vivo Keyd Stars Academy",
-            reasoning="A" * 300,  # reasoning propositalmente longo
+            reasoning="A" * 300,
         )
         result = format_for_twitter(p)
-        assert len(result) <= TWITTER_LIMIT, f"passou de 280: {len(result)} chars"
+        assert len(result) <= TWITTER_SHORT_LIMIT, f"passou de 280: {len(result)} chars"
 
     def test_nomes_abreviados_no_header(self):
         p = _make_prediction(
@@ -156,7 +175,7 @@ class TestFormatForTwitter:
         )
         result = format_for_twitter(p)
         assert result.endswith("#CBLOL #LoL #Circuitão #OráculoDoLoL")
-        assert len(result) <= TWITTER_LIMIT
+        assert len(result) <= TWITTER_SHORT_LIMIT
 
     def test_hashtags_sempre_presentes(self):
         p = _make_prediction()
@@ -183,7 +202,7 @@ class TestFormatForTwitter:
             ],
         )
         result = format_for_twitter(p)
-        assert len(result) <= TWITTER_LIMIT
+        assert len(result) <= TWITTER_SHORT_LIMIT
 
     def test_sem_times_nao_quebra(self):
         p = Prediction(
@@ -195,15 +214,9 @@ class TestFormatForTwitter:
             teams=[],
         )
         result = format_for_twitter(p)
-        assert len(result) <= TWITTER_LIMIT
+        assert len(result) <= TWITTER_SHORT_LIMIT
 
     def test_nomes_curtos_aproveitam_mais_espaco(self):
-        """Com nomes curtos o reasoning incluído deve ser maior do que com nomes longos.
-
-        O post total com nomes longos pode chegar mais perto dos 280 chars porque
-        o header/winner_line são maiores — mas o reasoning em si fica menor.
-        Com nomes curtos o header ocupa menos, sobra mais espaço para o reasoning.
-        """
         reasoning = "X" * 160
 
         p_curto = _make_prediction(
@@ -222,35 +235,94 @@ class TestFormatForTwitter:
         result_curto = format_for_twitter(p_curto)
         result_longo = format_for_twitter(p_longo)
 
-        # Ambos respeitam o limite
-        assert len(result_curto) <= TWITTER_LIMIT
-        assert len(result_longo) <= TWITTER_LIMIT
+        assert len(result_curto) <= TWITTER_SHORT_LIMIT
+        assert len(result_longo) <= TWITTER_SHORT_LIMIT
 
-        # Extrai o reasoning incluído em cada post (entre \n\n e \n\n#)
         def _extract_reasoning(post: str) -> str:
             parts = post.split("\n\n")
-            # estrutura: header+winner | reasoning | hashtags
             return parts[1] if len(parts) >= 3 else ""
 
         reasoning_curto = _extract_reasoning(result_curto)
         reasoning_longo = _extract_reasoning(result_longo)
 
-        # Com nomes curtos o reasoning incluído deve ser maior ou igual
-        assert len(reasoning_curto) >= len(reasoning_longo), (
-            f"esperado reasoning_curto ({len(reasoning_curto)}) >= "
-            f"reasoning_longo ({len(reasoning_longo)})"
-        )
+        assert len(reasoning_curto) >= len(reasoning_longo)
 
 
 # ---------------------------------------------------------------------------
-# format_for_threads
+# format_for_twitter_long (X Premium — limite 25000)
+# ---------------------------------------------------------------------------
+
+class TestFormatForTwitterLong:
+    def test_nunca_passa_25000_chars(self):
+        p = _make_prediction(reasoning_long="A" * 30000)
+        result = format_for_twitter_long(p)
+        assert len(result) <= TWITTER_LIMIT, f"passou de 25000: {len(result)} chars"
+
+    def test_nomes_abreviados(self):
+        p = _make_prediction(
+            team_a="Vivo Keyd Stars Academy",
+            team_b="RED Canids Kalunga",
+        )
+        result = format_for_twitter_long(p)
+        assert "Vivo Keyd" in result
+        assert "Red Canids" in result
+        assert "Vivo Keyd Stars Academy" not in result
+
+    def test_reasoning_long_usado_quando_disponivel(self):
+        p = _make_prediction(
+            reasoning="Curto.",
+            reasoning_long="Análise detalhada com picks e forma recente.",
+        )
+        result = format_for_twitter_long(p)
+        assert "Análise detalhada" in result
+        assert "Curto." not in result
+
+    def test_fallback_para_reasoning_quando_long_ausente(self):
+        p = _make_prediction(
+            reasoning="Análise curta usada como fallback.",
+            reasoning_long=None,
+        )
+        result = format_for_twitter_long(p)
+        assert "Análise curta" in result
+
+    def test_hashtags_presentes(self):
+        p = _make_prediction()
+        result = format_for_twitter_long(p)
+        assert "#CBLOL" in result
+
+    def test_credito_liquipedia_presente(self):
+        p = _make_prediction()
+        result = format_for_twitter_long(p)
+        assert "Liquipedia" in result
+
+    def test_probabilidades_presentes(self):
+        p = _make_prediction(prob_a=0.72, prob_b=0.28)
+        result = format_for_twitter_long(p)
+        assert "72%" in result
+        assert "28%" in result
+
+    def test_sem_times_nao_quebra(self):
+        p = Prediction(
+            pandascore_match_id=1,
+            llm_model="gpt-4o",
+            predicted_winner=None,
+            confidence=None,
+            reasoning=None,
+            teams=[],
+        )
+        result = format_for_twitter_long(p)
+        assert len(result) <= TWITTER_LIMIT
+
+
+# ---------------------------------------------------------------------------
+# format_for_threads (limite 500)
 # ---------------------------------------------------------------------------
 
 class TestFormatForThreads:
-    def test_nunca_passa_280_chars(self):
-        p = _make_prediction(reasoning="B" * 300)
+    def test_nunca_passa_500_chars(self):
+        p = _make_prediction(reasoning="B" * 600)
         result = format_for_threads(p)
-        assert len(result) <= THREADS_LIMIT, f"passou de 280: {len(result)} chars"
+        assert len(result) <= THREADS_LIMIT, f"passou de 500: {len(result)} chars"
 
     def test_nomes_abreviados(self):
         p = _make_prediction(
@@ -274,13 +346,25 @@ class TestFormatForThreads:
         result = format_for_threads(p)
         assert reasoning in result
 
+    def test_threads_tem_mais_espaco_que_twitter_short(self):
+        """Threads (500) permite reasoning maior que o Twitter legado (280)."""
+        reasoning = "X" * 250
+
+        p = _make_prediction(reasoning=reasoning)
+        result_threads = format_for_threads(p)
+        result_twitter = format_for_twitter(p)
+
+        assert len(result_threads) <= THREADS_LIMIT
+        assert len(result_twitter) <= TWITTER_SHORT_LIMIT
+        assert len(result_threads) > len(result_twitter)
+
 
 # ---------------------------------------------------------------------------
 # calc_available_chars
 # ---------------------------------------------------------------------------
 
 class TestCalcAvailableChars:
-    def test_retorna_positivo_com_nomes_curtos(self):
+    def test_threads_retorna_positivo_com_nomes_curtos(self):
         result = calc_available_chars(
             team_a_name="LOUD",
             team_b_name="Fluxo W7M",
@@ -288,10 +372,11 @@ class TestCalcAvailableChars:
             confidence="alta",
             win_prob_a=0.65,
             win_prob_b=0.35,
+            platform="threads",
         )
         assert result > 0
 
-    def test_retorna_positivo_com_nomes_longos(self):
+    def test_threads_retorna_positivo_com_nomes_longos(self):
         result = calc_available_chars(
             team_a_name="Vivo Keyd Stars Academy",
             team_b_name="Ei Nerd Esports",
@@ -299,10 +384,11 @@ class TestCalcAvailableChars:
             confidence="média",
             win_prob_a=0.72,
             win_prob_b=0.28,
+            platform="threads",
         )
         assert result > 0
 
-    def test_nomes_curtos_tem_mais_espaco_que_longos(self):
+    def test_threads_nomes_curtos_tem_mais_espaco_que_longos(self):
         curto = calc_available_chars(
             team_a_name="LOUD",
             team_b_name="Fluxo W7M",
@@ -310,6 +396,7 @@ class TestCalcAvailableChars:
             confidence="alta",
             win_prob_a=0.65,
             win_prob_b=0.35,
+            platform="threads",
         )
         longo = calc_available_chars(
             team_a_name="Vivo Keyd Stars Academy",
@@ -318,6 +405,7 @@ class TestCalcAvailableChars:
             confidence="média",
             win_prob_a=0.72,
             win_prob_b=0.28,
+            platform="threads",
         )
         assert curto > longo
 
@@ -329,6 +417,7 @@ class TestCalcAvailableChars:
             confidence="média",
             win_prob_a=0.5,
             win_prob_b=0.5,
+            platform="threads",
         )
         assert result >= 0
 
@@ -338,13 +427,40 @@ class TestCalcAvailableChars:
             team_b_name=None,
             predicted_winner=None,
             confidence=None,
+            platform="threads",
         )
         assert result >= 0
 
+    def test_twitter_long_retorna_1500(self):
+        """Platform twitter_long retorna valor fixo generoso."""
+        result = calc_available_chars(
+            team_a_name="LOUD",
+            team_b_name="Fluxo W7M",
+            predicted_winner="LOUD",
+            confidence="alta",
+            platform="twitter_long",
+        )
+        assert result == 1500
+
+    def test_twitter_short_retorna_menor_que_threads(self):
+        """Platform twitter_short (280) tem menos espaço que threads (500)."""
+        short = calc_available_chars(
+            team_a_name="LOUD",
+            team_b_name="Fluxo W7M",
+            predicted_winner="LOUD",
+            confidence="alta",
+            platform="twitter_short",
+        )
+        threads = calc_available_chars(
+            team_a_name="LOUD",
+            team_b_name="Fluxo W7M",
+            predicted_winner="LOUD",
+            confidence="alta",
+            platform="threads",
+        )
+        assert short < threads
+
     def test_abaixo_do_minimo_retorna_zero(self):
-        """Se o espaço disponível for menor que MIN_REASONING_CHARS, retorna 0."""
-        # Força um cenário com reasoning quase impossível de caber
-        # usando nomes que — mesmo abreviados — deixam pouco espaço
         result = calc_available_chars(
             team_a_name="Ei Nerd Esports",
             team_b_name="Estral Esports",
@@ -352,6 +468,6 @@ class TestCalcAvailableChars:
             confidence="média",
             win_prob_a=0.55,
             win_prob_b=0.45,
+            platform="threads",
         )
-        # Não sabemos o valor exato, mas nunca deve ser negativo
         assert result >= 0
