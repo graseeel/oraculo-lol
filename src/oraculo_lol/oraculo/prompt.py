@@ -18,19 +18,27 @@ O formato esperado é:
     {"name": "<time A>", "win_probability": <0.0 a 1.0>},
     {"name": "<time B>", "win_probability": <0.0 a 1.0>}
   ],
-  "reasoning": "<análise curta e direta>"
+  "reasoning": "<análise curta para Threads — limite informado na mensagem>",
+  "reasoning_long": "<análise detalhada para o X — limite informado na mensagem>"
 }
 
-Regras para o reasoning:
-- Escreva em português brasileiro corrido, sem bullet points
-- O número máximo de caracteres será informado na mensagem do usuário — respeite exatamente
-- Se houver draft do jogo específico, priorize análise da draft sobre forma recente
-- Se houver apenas histórico de picks, use para identificar padrões de composição
-- Termos em inglês permitidos quando forem jargão consolidado: "stomp", "diff", "carry", "feed"
-- Nunca use "miracle run", "missão impossível" ou expressões genéricas de hype
-- Se a diferença for grande, pode dizer que será um stomp. Se equilibrado, diga que é difícil prever
-- Se não houver dados suficientes, seja honesto e explique brevemente
+Regras para o reasoning (curto — Threads):
+- Português brasileiro corrido, sem bullet points
+- Respeite o limite de caracteres informado
+- Direto ao ponto — cite o fator decisivo
+
+Regras para o reasoning_long (X Premium):
+- Português brasileiro corrido, sem bullet points
+- Respeite o limite de caracteres informado
+- Pode citar campeões específicos dos picks se disponíveis
+- Mencione forma recente, H2H e o fator decisivo
+- Tom de narrador ao vivo — energia, mas fundamentado em dados
+- Termos em inglês permitidos: "stomp", "diff", "carry", "feed"
+- Nunca use "miracle run", "missão impossível" ou hype genérico
+
+Regras gerais:
 - win_probability dos dois times deve somar 1.0
+- Se não houver dados suficientes, seja honesto
 - Responda em português brasileiro
 """
 
@@ -44,7 +52,6 @@ def _fmt_winrate(history: TeamHistory) -> str:
 
 
 def _fmt_draft_specific(enrichment: LiquipediaEnrichment) -> str | None:
-    """Formata seção de picks/bans do jogo específico (status='ok')."""
     if enrichment.status != "ok" or not enrichment.teams:
         return None
 
@@ -66,7 +73,6 @@ def _fmt_draft_specific(enrichment: LiquipediaEnrichment) -> str | None:
 
 
 def _fmt_recent_draft(draft: RecentDraft, team_name: str) -> str:
-    """Formata um draft recente de um time específico."""
     team_data = next(
         (t for t in draft.teams if t.name == team_name),
         draft.teams[0] if draft.teams else None,
@@ -82,21 +88,18 @@ def _fmt_recent_draft(draft: RecentDraft, team_name: str) -> str:
 
 
 def _fmt_draft_recent(enrichment: LiquipediaEnrichment, ctx: MatchContext) -> str | None:
-    """Formata seção de histórico de picks por time (status='recent_only')."""
     if enrichment.status != "recent_only" or not enrichment.recent_drafts:
         return None
 
     lines: list[str] = ["## Picks Recentes (últimas partidas)\n"]
-
     team_names = [t.name or "" for t in ctx.teams]
     keys = ["team_a", "team_b"]
 
-    for i, (key, team_name) in enumerate(zip(keys, team_names)):
+    for key, team_name in zip(keys, team_names):
         drafts = enrichment.recent_drafts.get(key, [])
         if not drafts:
             lines.append(f"**{team_name}**: sem dados de picks recentes\n")
             continue
-
         lines.append(f"**{team_name}**")
         for draft in drafts:
             line = _fmt_recent_draft(draft, team_name)
@@ -107,19 +110,20 @@ def _fmt_draft_recent(enrichment: LiquipediaEnrichment, ctx: MatchContext) -> st
     return "\n".join(lines)
 
 
-def build_prompt(ctx: MatchContext, max_reasoning_chars: int) -> str:
+def build_prompt(ctx: MatchContext, max_reasoning_chars: int, max_reasoning_long_chars: int = 1500) -> str:
     lines: list[str] = []
 
-    # --- Instrução de limite de reasoning ---
+    # --- Instruções de limite ---
     if max_reasoning_chars > 0:
         lines.append(
-            f"⚠️ LIMITE DO REASONING: exatamente até {max_reasoning_chars} caracteres. "
-            "Não ultrapasse. Não precisa preencher tudo, mas use bem o espaço.\n"
+            f"⚠️ LIMITE reasoning (Threads): até {max_reasoning_chars} caracteres.\n"
+            f"⚠️ LIMITE reasoning_long (X): até {max_reasoning_long_chars} caracteres.\n"
+            "Respeite ambos os limites exatamente.\n"
         )
     else:
         lines.append(
-            "⚠️ LIMITE DO REASONING: espaço insuficiente nesta postagem. "
-            'Defina reasoning como "" (string vazia).\n'
+            "⚠️ LIMITE reasoning: espaço insuficiente. Use string vazia.\n"
+            f"⚠️ LIMITE reasoning_long (X): até {max_reasoning_long_chars} caracteres.\n"
         )
 
     # --- Cabeçalho ---
@@ -152,12 +156,12 @@ def build_prompt(ctx: MatchContext, max_reasoning_chars: int) -> str:
                 lines.append("_(roster não disponível)_")
             lines.append("")
 
-    # --- Draft do jogo específico (partida passada com picks) ---
+    # --- Draft específico ---
     draft_section = _fmt_draft_specific(ctx.liquipedia_enrichment)
     if draft_section:
         lines.append(draft_section)
 
-    # --- Histórico de picks (partida futura) ---
+    # --- Picks históricos ---
     recent_section = _fmt_draft_recent(ctx.liquipedia_enrichment, ctx)
     if recent_section:
         lines.append(recent_section)
@@ -206,7 +210,6 @@ def build_prompt(ctx: MatchContext, max_reasoning_chars: int) -> str:
             f"{a} e {b} nunca se enfrentaram nos dados disponíveis.\n"
         )
 
-    # --- Stats extras ---
     if ctx.stats:
         lines.append("## Estatísticas Adicionais\n")
         for key, value in ctx.stats.items():

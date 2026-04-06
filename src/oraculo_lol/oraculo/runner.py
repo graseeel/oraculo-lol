@@ -7,7 +7,6 @@ from typing import Any
 
 from ..agregador.build_context import build_match_context
 from ..models.context import MatchContext
-from ..paths import ensure_dir
 from ..publisher.layout import calc_available_chars
 from ..settings import load_settings
 from .llm import LLMError, from_env as llm_from_env
@@ -68,32 +67,47 @@ def _parse_llm_response(raw: str, match_id: int, model: str) -> Prediction:
         confidence=data.get("confidence"),
         teams=teams,
         reasoning=data.get("reasoning"),
+        reasoning_long=data.get("reasoning_long"),
         raw_response=raw,
         parse_error=False,
     )
 
 
-def _calc_reasoning_limit(ctx: MatchContext) -> int:
+def _calc_reasoning_limits(ctx: MatchContext) -> tuple[int, int]:
     """
-    Calcula o limite de chars para o reasoning com base nos times do contexto.
-    Usa os nomes como vêm do Pandascore — o _abbreviate interno cuida da abreviação.
+    Retorna (max_reasoning_chars, max_reasoning_long_chars).
+    reasoning       → Threads (500 chars)
+    reasoning_long  → X Premium (1500 chars — valor fixo generoso)
     """
     if len(ctx.teams) == 2:
         a, b = ctx.teams[0], ctx.teams[1]
-        return calc_available_chars(
+        threads_limit = calc_available_chars(
             team_a_name=a.name,
             team_b_name=b.name,
-            predicted_winner=a.name,  # pior caso: nome do time A como vencedor
-            confidence="média",       # pior caso: "MÉDIA" tem 5 chars (mesmo que "ALTA")
+            predicted_winner=a.name,
+            confidence="média",
             win_prob_a=0.72,
             win_prob_b=0.28,
+            platform="threads",
         )
-    return calc_available_chars(
+    else:
+        threads_limit = calc_available_chars(
+            team_a_name=None,
+            team_b_name=None,
+            predicted_winner=None,
+            confidence="média",
+            platform="threads",
+        )
+
+    twitter_long_limit = calc_available_chars(
         team_a_name=None,
         team_b_name=None,
         predicted_winner=None,
-        confidence="média",
+        confidence=None,
+        platform="twitter_long",
     )
+
+    return threads_limit, twitter_long_limit
 
 
 def run_prediction(
@@ -101,18 +115,9 @@ def run_prediction(
     match_id: int | None = None,
     context_file: Path | None = None,
 ) -> Prediction:
-    """
-    Ponto de entrada principal do oráculo.
-
-    Estratégia de carregamento do contexto:
-    1. Se context_file fornecido → carrega direto
-    2. Se match_id fornecido → tenta o path padrão; se não existir, gera na hora
-    3. Nenhum dos dois → ValueError
-    """
     if context_file is None and match_id is None:
         raise ValueError("forneça --match-id ou --context-file")
 
-    # --- Carregar contexto ---
     ctx: MatchContext
 
     if context_file is not None:
@@ -131,22 +136,19 @@ def run_prediction(
 
     effective_match_id = ctx.pandascore_match_id
 
-    # --- Calcular limite dinâmico de reasoning ---
-    max_reasoning_chars = _calc_reasoning_limit(ctx)
+    # --- Calcular limites dinâmicos ---
+    max_reasoning_chars, max_reasoning_long_chars = _calc_reasoning_limits(ctx)
     logger.info(
-        "limite dinâmico de reasoning: %d chars para match_id=%s",
-        max_reasoning_chars,
-        effective_match_id,
+        "limites de reasoning: threads=%d chars | twitter_long=%d chars | match_id=%s",
+        max_reasoning_chars, max_reasoning_long_chars, effective_match_id,
     )
 
     # --- Chamar LLM ---
     client = llm_from_env()
-    logger.info(
-        "chamando LLM model=%s para match_id=%s", client.model, effective_match_id
-    )
+    logger.info("chamando LLM model=%s para match_id=%s", client.model, effective_match_id)
 
-    user_msg = build_prompt(ctx, max_reasoning_chars)
-    raw = client.chat(system=system_prompt(), user=user_msg)
+    user_msg = build_prompt(ctx, max_reasoning_chars, max_reasoning_long_chars)
+    raw = client.chat(system=system_prompt(), user=user_msg, max_tokens=2048)
 
     # --- Parsear resposta ---
     prediction = _parse_llm_response(raw, effective_match_id, client.model)
@@ -155,10 +157,11 @@ def run_prediction(
         logger.warning("LLM retornou resposta não-JSON para match_id=%s", effective_match_id)
     else:
         logger.info(
-            "previsão: vencedor=%r confiança=%s reasoning_len=%d",
+            "previsão: vencedor=%r confiança=%s reasoning=%d chars reasoning_long=%d chars",
             prediction.predicted_winner,
             prediction.confidence,
             len(prediction.reasoning or ""),
+            len(prediction.reasoning_long or ""),
         )
 
     return prediction

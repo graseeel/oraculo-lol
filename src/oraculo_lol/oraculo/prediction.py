@@ -16,7 +16,7 @@ logger = logging.getLogger("oraculo_lol.oraculo.prediction")
 
 class TeamPrediction(BaseModel):
     name: str
-    win_probability: float | None = None  # 0.0–1.0, se o modelo fornecer
+    win_probability: float | None = None
 
 
 class Prediction(BaseModel):
@@ -27,15 +27,19 @@ class Prediction(BaseModel):
     llm_model: str
     llm_provider: Literal["openai"] = "openai"
 
-    # Resultado principal
-    predicted_winner: str | None = None          # nome do time favorito
-    confidence: str | None = None                # "alta" / "média" / "baixa"
+    predicted_winner: str | None = None
+    confidence: str | None = None
     teams: list[TeamPrediction] = Field(default_factory=list)
-    reasoning: str | None = None                 # raciocínio livre do modelo
 
-    # Saída bruta (sempre preservada para auditoria)
+    # Reasoning curto — para Threads (até ~400 chars)
+    reasoning: str | None = None
+
+    # Reasoning longo — para o X com Premium (até ~1500 chars)
+    # Inclui picks, forma recente, H2H e análise detalhada
+    reasoning_long: str | None = None
+
     raw_response: str = ""
-    parse_error: bool = False                    # True se não conseguiu parsear o JSON da LLM
+    parse_error: bool = False
 
 
 def save_prediction_json(prediction: Prediction) -> Path:

@@ -3,8 +3,14 @@ from __future__ import annotations
 from ..models.postgame import MatchPostGame
 from ..oraculo.prediction import Prediction
 
-TWITTER_LIMIT = 280
-THREADS_LIMIT = 280
+# X com Premium Basic — posts longos
+TWITTER_LIMIT = 25000
+
+# Threads — limite real da plataforma
+THREADS_LIMIT = 500
+
+# Limite legado mantido para compatibilidade e fallback
+TWITTER_SHORT_LIMIT = 280
 
 _CONFIDENCE_EMOJI = {
     "alta": "🔥",
@@ -83,6 +89,10 @@ def _hashtags() -> str:
 
 
 def format_for_twitter(prediction: Prediction) -> str:
+    """
+    Post curto para compatibilidade — mantido para testes e fallback.
+    Limite: TWITTER_SHORT_LIMIT (280 chars).
+    """
     header = _header(prediction)
     winner = _winner_line(prediction)
     tags = _hashtags()
@@ -90,7 +100,7 @@ def format_for_twitter(prediction: Prediction) -> str:
 
     base = f"{header}\n{winner}\n\n"
     suffix = f"\n\n{tags}"
-    available = TWITTER_LIMIT - len(base) - len(suffix)
+    available = TWITTER_SHORT_LIMIT - len(base) - len(suffix)
 
     if available > 20 and reasoning:
         if len(reasoning) <= available:
@@ -100,10 +110,63 @@ def format_for_twitter(prediction: Prediction) -> str:
         return f"{base}{truncated}{suffix}"
 
     short = f"{header}\n{winner}\n\n{tags}"
-    return short[:TWITTER_LIMIT]
+    return short[:TWITTER_SHORT_LIMIT]
+
+
+def format_for_twitter_long(prediction: Prediction) -> str:
+    """
+    Post longo para o X com Premium Basic.
+    Usa reasoning_long se disponível, senão usa reasoning.
+    Estrutura rica com seções separadas.
+    Limite: TWITTER_LIMIT (25000 chars).
+    """
+    a_name = _abbreviate(prediction.teams[0].name) if len(prediction.teams) >= 1 else "?"
+    b_name = _abbreviate(prediction.teams[1].name) if len(prediction.teams) >= 2 else "?"
+
+    winner = _abbreviate(prediction.predicted_winner)
+    conf_emoji = _CONFIDENCE_EMOJI.get(prediction.confidence or "", "🎯")
+    conf = (prediction.confidence or "?").upper()
+
+    pa = pb = None
+    if len(prediction.teams) == 2:
+        pa = prediction.teams[0].win_probability
+        pb = prediction.teams[1].win_probability
+
+    pa_str = f"{pa * 100:.0f}%" if pa is not None else "?"
+    pb_str = f"{pb * 100:.0f}%" if pb is not None else "?"
+
+    reasoning = prediction.reasoning_long or prediction.reasoning or ""
+    tags = _hashtags()
+
+    lines = [
+        f"⚔️ {a_name} vs {b_name}",
+        "",
+        f"{conf_emoji} Favorito: {winner} | {conf}",
+        f"{a_name} {pa_str} × {pb_str} {b_name}",
+        "",
+    ]
+
+    if reasoning:
+        lines += [
+            "📝 Análise",
+            reasoning,
+            "",
+        ]
+
+    lines += [
+        tags,
+        "Dados: Pandascore & Liquipedia",
+    ]
+
+    result = "\n".join(lines)
+    return result[:TWITTER_LIMIT]
 
 
 def format_for_threads(prediction: Prediction) -> str:
+    """
+    Post para o Threads com limite real de 500 chars.
+    Usa reasoning (curto) — mais conciso que o X long.
+    """
     header = _header(prediction)
     winner = _winner_line(prediction)
     reasoning = prediction.reasoning or ""
@@ -128,10 +191,6 @@ def format_for_threads(prediction: Prediction) -> str:
 # ---------------------------------------------------------------------------
 
 def format_postgame_game(postgame: MatchPostGame) -> str:
-    """
-    Post de pós-jogo para um game individual.
-    Estrutura: header + placar + summary GPT + hashtags
-    """
     if not postgame.games:
         return ""
 
@@ -147,7 +206,7 @@ def format_postgame_game(postgame: MatchPostGame) -> str:
 
     base = f"{header}\n{score}\n"
     suffix = f"\n{tags}"
-    available = TWITTER_LIMIT - len(base) - len(suffix)
+    available = TWITTER_SHORT_LIMIT - len(base) - len(suffix)
 
     summary = postgame.game_summary or ""
     if summary and available > 20:
@@ -155,14 +214,10 @@ def format_postgame_game(postgame: MatchPostGame) -> str:
             summary = summary[:available - 3].rsplit(" ", 1)[0] + "..."
         return f"{base}{summary}{suffix}"
 
-    return f"{base}{suffix}"[:TWITTER_LIMIT]
+    return f"{base}{suffix}"[:TWITTER_SHORT_LIMIT]
 
 
 def format_postgame_series(postgame: MatchPostGame) -> str:
-    """
-    Post de resultado final da série.
-    Estrutura: resultado + acerto/erro da previsão + summary + hashtags
-    """
     a = _abbreviate(postgame.team_a_name)
     b = _abbreviate(postgame.team_b_name)
     winner = _abbreviate(
@@ -183,11 +238,11 @@ def format_postgame_series(postgame: MatchPostGame) -> str:
 
     base = f"{header}\n{prediction_line}\n" if prediction_line else f"{header}\n"
     suffix = f"\n{tags}"
-    available = TWITTER_LIMIT - len(base) - len(suffix)
+    available = TWITTER_SHORT_LIMIT - len(base) - len(suffix)
 
     if summary and available > 20:
         if len(summary) > available:
             summary = summary[:available - 3].rsplit(" ", 1)[0] + "..."
         return f"{base}{summary}{suffix}"
 
-    return f"{base}{suffix}"[:TWITTER_LIMIT]
+    return f"{base}{suffix}"[:TWITTER_SHORT_LIMIT]

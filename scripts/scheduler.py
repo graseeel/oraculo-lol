@@ -14,7 +14,7 @@ from oraculo_lol.oraculo.prediction import save_prediction_json
 from oraculo_lol.oraculo.runner import run_prediction
 from oraculo_lol.publisher.formatter import (
     format_for_threads,
-    format_for_twitter,
+    format_for_twitter_long,
     format_postgame_game,
     format_postgame_series,
 )
@@ -94,7 +94,7 @@ def _process_pregame(match: dict[str, Any]) -> None:
         prediction = run_prediction(match_id=int(match_id))
         save_prediction_json(prediction)
 
-        tw = format_for_twitter(prediction)
+        tw = format_for_twitter_long(prediction)
         th = format_for_threads(prediction)
         tw_ok, th_ok = _post_both(tw, th, name)
 
