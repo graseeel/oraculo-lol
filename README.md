@@ -1,103 +1,79 @@
-# O Oráculo do LoL
+# ⚔️ Oráculo do LoL
 
-Bot automatizado de análise e previsão de esports (League of Legends), começando pelo cenário brasileiro (CBLOL, Circuitão e torneios não-oficiais como CBLoW).
+Bot automatizado de previsão de partidas do cenário brasileiro de League of Legends. Analisa dados de rosters, histórico, H2H e drafts para gerar previsões fundamentadas antes de cada jogo do CBLOL e Circuito Desafiante.
 
-## Estrutura (MVP)
+> Dados fornecidos por [Pandascore](https://pandascore.co) e [Liquipedia](https://liquipedia.net/leagueoflegends)
 
-- `src/oraculo_lol/`: pacote principal (config, logging, modelos, utilitários)
-- `scripts/`: entrypoints (rodados via `python -m ...`)
-  - `scripts/agregador.py`: compila o JSON de contexto da partida
-  - `scripts/oraculo.py`: gera previsão usando LLM a partir do contexto
-  - `scripts/scheduler.py`: checa novos jogos a cada hora
-- `data/`: arquivos locais (SQLite, caches, dumps de contexto)
+---
 
-## Requisitos
+## O que o bot faz
+
+- **Pré-jogo** — 1 hora antes de cada partida, posta uma análise com favorito, probabilidades e reasoning baseado em forma recente, H2H e picks históricos
+- **Pós-jogo** — ao término de cada game, posta o resultado com duração e placar da série
+- **Resultado final** — ao fim da série, compara com a previsão e indica acerto ou erro
+- **Alertas operacionais** — notificações via Telegram sobre postagens, falhas e expiração de tokens
+
+Plataformas: **X** (posts longos com Premium Basic) e **Threads** (500 chars).
+
+---
+
+## Fontes de dados
+
+| Fonte | Uso |
+|---|---|
+| Pandascore | Partidas, rosters, histórico, H2H |
+| Liquipedia | Picks, bans e KDA por jogador |
+| OpenAI GPT-4o | Geração da análise e previsão |
+
+---
+
+## Stack
 
 - Python 3.13
-- `pip` + `venv`
+- Streamlit (painel de controle)
+- launchd (scheduler autônomo no macOS)
+- Telegram Bot API (alertas)
 
-## Setup rápido
+---
 
-Crie e ative o ambiente virtual:
+## Configuração
 
 ```bash
 python3.13 -m venv .venv
 source .venv/bin/activate
-python -m pip install --upgrade pip
 pip install -r requirements.txt -r requirements-dev.txt
 pip install -e .
-```
-
-Crie seu `.env`:
-
-```bash
 cp .env.example .env
 ```
 
-## Execução (esqueleto)
+Preencha o `.env` com as chaves das APIs.
 
+---
+
+## Rodando
+
+**Scheduler** (autônomo via launchd):
 ```bash
-python -m scripts.scheduler
+python -m scripts.setup_launchd
 ```
 
-## App (UI) — Painel do Operador
-
-Se você não quiser usar terminal para cada comando, rode o app Streamlit:
-
+**Painel de controle**:
 ```bash
-source .venv/bin/activate
-pip install -r requirements.txt -r requirements-dev.txt
-pip install -e .
-streamlit run app/streamlit_app.py
+streamlit run app/streamlit_app.py --server.address=0.0.0.0
 ```
 
-## Comandos úteis (CLI do agregador)
+---
 
-### Pandascore
-
-- Buscar ligas:
+## Testes
 
 ```bash
-python -m scripts.agregador pandascore-leagues --q "CBLOL"
+pytest tests/ -v
 ```
 
-- Próximas partidas BR (CBLOL + Circuitão):
+75 testes cobrindo formatter, layout e pós-jogo.
 
-```bash
-python -m scripts.agregador pandascore-upcoming-br --max-pages 2
-```
+---
 
-### Riot
+## Licença
 
-- Status do servidor BR1:
-
-```bash
-python -m scripts.agregador riot-status --platform br1
-```
-
-- Conta por Riot ID (gameName#tagLine):
-
-```bash
-python -m scripts.agregador riot-account --regional americas --game-name "fade" --tag-line "void"
-```
-
-### Agregação (Contexto / Rosters)
-
-- Baixar snapshot de rosters (descoberto via próximas partidas):
-
-```bash
-python -m scripts.agregador sync-rosters --max-pages 5
-```
-
-- Gerar contexto de um match Pandascore:
-
-```bash
-python -m scripts.agregador build-context --match-id 123456
-```
-
-## Notas de design
-
-- Configuração via variáveis de ambiente (`.env`) para chaves/API tokens e paths.
-- Logging padronizado em JSON (útil para scheduler) + modo humano para debug.
-- Os scripts em `scripts/` apenas orquestram; a lógica fica no pacote `oraculo_lol/`.
-
+Open source — dados da Liquipedia usados sob licença [CC-BY-SA 3.0](https://creativecommons.org/licenses/by-sa/3.0/us/).
