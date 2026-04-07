@@ -62,7 +62,6 @@ Gere um JSON com:
 def _build_series_prompt(postgame: MatchPostGame) -> str:
     a = _abbreviate(postgame.team_a_name)
     b = _abbreviate(postgame.team_b_name)
-    winner_id = postgame.team_a_id if postgame.score_a > postgame.score_b else postgame.team_b_id
     winner_name = _abbreviate(
         postgame.team_a_name if postgame.score_a > postgame.score_b else postgame.team_b_name
     )
@@ -80,8 +79,16 @@ Resultado: {winner_name} vence {postgame.score_a}x{postgame.score_b}
 
 Gere um JSON com:
 {{
-  "summary": "<análise da série em até 130 caracteres — mencione o acerto/erro da previsão se houver>"
-}}"""
+  "summary": "<análise da série em até 200 caracteres>"
+}}
+
+Regras para o summary:
+- Tom neutro e analítico — sem dramatismo
+- Se acertou: celebre brevemente e explique o que foi decisivo
+- Se errou: reconheça a surpresa sem drama — ex: "X surpreendeu ao dominar Y com..."
+- NUNCA escreva "Previsão do Oráculo foi ERRADA" — use "surpreendeu", "contrariou as expectativas"
+- Cite o tempo de jogo e o fator decisivo
+- Português brasileiro corrido, sem bullet points"""
 
 
 def run_postgame_analysis(postgame: MatchPostGame, *, mode: str) -> str:

@@ -306,7 +306,7 @@ class TestFormatPostgameSeries:
     def test_placar_presente(self):
         pg = _make_postgame(score_a=2, score_b=1)
         result = format_postgame_series(pg)
-        assert "2x1" in result
+        assert "2×1" in result
 
     def test_nomes_abreviados(self):
         pg = _make_postgame(

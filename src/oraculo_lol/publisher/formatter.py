@@ -216,31 +216,38 @@ def format_postgame_game(postgame: MatchPostGame) -> str:
 
 
 def format_postgame_series(postgame: MatchPostGame) -> str:
+    """
+    Resultado final da série — usa espaço do X Premium (até 600 chars).
+    Tom neutro no acerto/erro, análise do GPT expandida.
+    """
     a = _abbreviate(postgame.team_a_name)
     b = _abbreviate(postgame.team_b_name)
     winner = _abbreviate(
         postgame.team_a_name if postgame.score_a > postgame.score_b else postgame.team_b_name
     )
 
-    header = f"🏆 {winner} vence! {a} {postgame.score_a}x{postgame.score_b} {b}"
+    header = f"🏆 {winner} vence! {a} {postgame.score_a}×{postgame.score_b} {b}"
 
     prediction_line = ""
     if postgame.predicted_winner is not None:
+        predicted = _abbreviate(postgame.predicted_winner)
         if postgame.prediction_correct:
-            prediction_line = f"✅ Oráculo acertou! Previsto: {_abbreviate(postgame.predicted_winner)}"
+            prediction_line = f"✅ Oráculo acertou — favorito {predicted} confirmado"
         else:
-            prediction_line = f"❌ Oráculo errou. Previa: {_abbreviate(postgame.predicted_winner)}"
+            prediction_line = f"❌ Oráculo errou — havia previsto {predicted}"
 
-    tags = _hashtags()
     summary = postgame.series_summary or ""
+    tags = _hashtags()
 
-    base = f"{header}\n{prediction_line}\n" if prediction_line else f"{header}\n"
-    suffix = f"\n{tags}"
-    available = TWITTER_SHORT_LIMIT - len(base) - len(suffix)
+    # Monta com espaço expandido do X Premium
+    parts = [header]
+    if prediction_line:
+        parts.append(prediction_line)
+    if summary:
+        parts.append("")
+        parts.append(summary)
+    parts.append("")
+    parts.append(tags)
 
-    if summary and available > 20:
-        if len(summary) > available:
-            summary = summary[:available - 3].rsplit(" ", 1)[0] + "..."
-        return f"{base}{summary}{suffix}"
-
-    return f"{base}{suffix}"[:TWITTER_SHORT_LIMIT]
+    result = "\n".join(parts)
+    return result[:TWITTER_LIMIT]
