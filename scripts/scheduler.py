@@ -19,6 +19,7 @@ from oraculo_lol.publisher.formatter import (
     format_postgame_game,
     format_postgame_series,
     format_split_opener,
+    format_streak,
     format_weekly_ranking,
 )
 from oraculo_lol.publisher.telegram import send_alert_safe
@@ -213,6 +214,9 @@ def _process_postgame(match: dict[str, Any], state: dict[str, Any]) -> None:
             posted_series.append(match_id)
             _save_state(state)
             logger.info("resultado final match=%s postado", name)
+
+            # Verifica sequência de acertos
+            _check_and_post_streak(state)
 
         except Exception as exc:  # noqa: BLE001
             logger.error("falha no resultado final match=%s err=%r", name, exc)
@@ -440,6 +444,72 @@ def _build_bot_accuracy_by_team() -> dict[str, dict]:
         data["accuracy"] = data["correct"] / data["total"] if data["total"] > 0 else 0.0
 
     return accuracy
+
+
+STREAK_THRESHOLD = 5  # acertos consecutivos para celebrar
+
+
+def _calc_current_streak() -> tuple[int, list[str]]:
+    """
+    Calcula a sequência atual de acertos consecutivos.
+    Retorna (streak_count, [nomes dos times acertados]).
+    """
+    s = load_settings()
+    pred_dir = s.abs_data_dir() / "predictions"
+    if not pred_dir.exists():
+        return 0, []
+
+    preds = []
+    for f in sorted(pred_dir.glob("*.json"), reverse=True):
+        try:
+            p = json.loads(f.read_text(encoding="utf-8"))
+            if p.get("prediction_correct") is not None and not p.get("parse_error"):
+                preds.append(p)
+        except Exception:  # noqa: BLE001
+            pass
+
+    streak = 0
+    teams = []
+    for p in preds:
+        if p.get("prediction_correct") is True:
+            streak += 1
+            winner = p.get("actual_winner") or p.get("predicted_winner") or "?"
+            teams.append(winner)
+        else:
+            break
+
+    return streak, teams
+
+
+def _check_and_post_streak(state: dict[str, Any]) -> None:
+    """
+    Verifica sequência de acertos e celebra se atingir o threshold.
+    Só posta quando a sequência aumenta além do último postado.
+    """
+    streak, teams = _calc_current_streak()
+
+    if streak < STREAK_THRESHOLD:
+        # Se a sequência caiu, reseta o controle
+        if streak == 0:
+            state["last_streak_posted"] = 0
+            _save_state(state)
+        return
+
+    last_posted = state.get("last_streak_posted", 0)
+    if streak <= last_posted:
+        return  # já postou para esse número ou maior
+
+    try:
+        tw = format_streak(streak, teams)
+        th = format_streak(streak, teams)
+        _post_both(tw, th, f"streak {streak}")
+
+        state["last_streak_posted"] = streak
+        _save_state(state)
+        logger.info("streak de %d acertos postado", streak)
+
+    except Exception as exc:  # noqa: BLE001
+        logger.error("falha ao postar streak err=%r", exc)
 
 
 def _check_and_post_weekly_ranking(

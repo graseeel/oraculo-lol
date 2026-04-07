@@ -377,3 +377,40 @@ def format_weekly_ranking(ranking_data: dict) -> str:
 
     result = "\n".join(lines)
     return result[:TWITTER_LIMIT]
+
+
+def format_streak(streak: int, teams: list[str]) -> str:
+    """
+    Celebra sequência de acertos consecutivos (a partir de 5).
+    """
+    tags = _hashtags()
+
+    # Emoji baseado no tamanho da streak
+    if streak >= 10:
+        emoji = "🔥🔥🔥"
+        hype = "O Oráculo está IMPARÁVEL."
+    elif streak >= 7:
+        emoji = "🔥🔥"
+        hype = "O Oráculo está em chamas."
+    else:
+        emoji = "🔥"
+        hype = "O Oráculo está afiado."
+
+    # Lista dos times acertados (últimos 5 no máximo)
+    shown = [_abbreviate(t) for t in teams[:5]]
+    teams_line = " ✅ · ".join(shown) + " ✅"
+    if len(teams) > 5:
+        teams_line += f" (+{len(teams)-5})"
+
+    lines = [
+        f"{emoji} {streak} acertos seguidos!",
+        "",
+        teams_line,
+        "",
+        hype + " Será que a sequência continua?",
+        "",
+        tags,
+    ]
+
+    result = "\n".join(lines)
+    return result[:THREADS_LIMIT]
