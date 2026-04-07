@@ -129,6 +129,75 @@ def _fmt_draft_recent(enrichment: LiquipediaEnrichment, ctx: MatchContext) -> st
     return "\n".join(lines)
 
 
+def _load_confidence_calibration(min_samples: int = 5) -> str:
+    """
+    Calcula acurácia por nível de confiança e retorna instrução de calibração para o GPT.
+    Só inclui níveis com pelo menos min_samples previsões.
+    """
+    try:
+        from pathlib import Path
+        from ..settings import load_settings
+        import json as _json
+
+        s = load_settings()
+        pred_dir = s.abs_data_dir() / "predictions"
+        if not pred_dir.exists():
+            return ""
+
+        conf_data: dict[str, dict] = {}
+        for f in pred_dir.glob("*.json"):
+            try:
+                p = _json.loads(f.read_text(encoding="utf-8"))
+                if p.get("prediction_correct") is None or p.get("parse_error"):
+                    continue
+                conf = (p.get("confidence") or "").lower()
+                if conf not in ("alta", "média", "baixa"):
+                    continue
+                if conf not in conf_data:
+                    conf_data[conf] = {"correct": 0, "total": 0}
+                conf_data[conf]["total"] += 1
+                if p.get("prediction_correct"):
+                    conf_data[conf]["correct"] += 1
+            except Exception:
+                pass
+
+        lines = []
+        for level in ["alta", "média", "baixa"]:
+            data = conf_data.get(level)
+            if not data or data["total"] < min_samples:
+                continue
+            total = data["total"]
+            correct = data["correct"]
+            acc = correct / total * 100
+
+            if level == "alta":
+                if acc < 60:
+                    advice = f"você está SUPERESTIMANDO. Use ALTA só quando a diferença for muito clara."
+                elif acc >= 75:
+                    advice = f"ótimo! Continue sendo criterioso com ALTA."
+                else:
+                    advice = f"razoável. Mantenha o padrão."
+            elif level == "média":
+                if acc >= 65:
+                    advice = f"bom! MÉDIA está calibrada corretamente."
+                else:
+                    advice = f"abaixo do esperado. Considere usar BAIXA quando houver muita incerteza."
+            else:
+                advice = f"poucos dados, mas esperado para BAIXA."
+
+            lines.append(f"- {level.upper()}: {correct}/{total} acertos ({acc:.0f}%) — {advice}")
+
+        if not lines:
+            return ""
+
+        header = "## Calibração de Confiança (baseada no seu histórico)\n"
+        footer = "\nUse essas métricas para calibrar seu nível de confiança nesta previsão.\n"
+        return header + "\n".join(lines) + footer
+
+    except Exception:
+        return ""
+
+
 def _load_recent_performance(last_n: int = 5) -> str:
     """
     Carrega os últimos N resultados do bot para incluir no prompt como feedback.
@@ -176,6 +245,11 @@ def _load_recent_performance(last_n: int = 5) -> str:
 
 def build_prompt(ctx: MatchContext, max_reasoning_chars: int, max_reasoning_long_chars: int = 1500) -> str:
     lines: list[str] = []
+
+    # Injeta calibração de confiança
+    calibration = _load_confidence_calibration(min_samples=5)
+    if calibration:
+        lines.append(calibration)
 
     # Injeta histórico de performance do bot
     performance = _load_recent_performance(last_n=5)
