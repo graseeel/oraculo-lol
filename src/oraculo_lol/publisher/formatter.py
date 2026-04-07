@@ -251,3 +251,57 @@ def format_postgame_series(postgame: MatchPostGame) -> str:
 
     result = "\n".join(parts)
     return result[:TWITTER_LIMIT]
+
+
+def format_daily_summary(summary: dict) -> str:
+    """
+    Resumo do dia de jogos — posta 1h após o último jogo.
+    Formato compacto, cabe no Threads e no X.
+    """
+    total = summary.get("total", 0)
+    acertos = summary.get("acertos", 0)
+    erros = summary.get("erros", 0)
+    acuracia = acertos / total * 100 if total > 0 else 0
+
+    # Emoji de acurácia
+    if acuracia >= 70:
+        acc_emoji = "🔥"
+    elif acuracia >= 50:
+        acc_emoji = "⚡"
+    else:
+        acc_emoji = "🤔"
+
+    # Linha de resultados individuais
+    results = summary.get("results", [])
+    result_lines = []
+    for r in results:
+        actual = _abbreviate(r.get("actual_winner"))
+        predicted = _abbreviate(r.get("predicted_winner"))
+        icon = "✅" if r.get("prediction_correct") else "❌"
+        result_lines.append(f"{icon} {actual} (previsto: {predicted})")
+
+    results_text = "\n".join(result_lines)
+    tags = _hashtags()
+
+    # Sequência atual
+    streak_text = ""
+    if acertos == total and total > 1:
+        streak_text = f"\n🎯 {total} acertos seguidos hoje!"
+    elif erros == total and total > 1:
+        streak_text = f"\nDia difícil — {total} erros. Voltamos amanhã."
+
+    lines = [
+        f"📊 Resumo do dia — {total} {'jogo' if total == 1 else 'jogos'}",
+        "",
+        f"{acc_emoji} {acertos} acertos · {erros} erros · {acuracia:.0f}% de acurácia",
+        "",
+        results_text,
+    ]
+
+    if streak_text:
+        lines.append(streak_text)
+
+    lines += ["", tags]
+
+    result = "\n".join(lines)
+    return result[:THREADS_LIMIT]

@@ -13,6 +13,7 @@ from oraculo_lol.oraculo.postgame_runner import build_postgame, run_postgame_ana
 from oraculo_lol.oraculo.prediction import save_prediction_json
 from oraculo_lol.oraculo.runner import run_prediction
 from oraculo_lol.publisher.formatter import (
+    format_daily_summary,
     format_for_threads,
     format_for_twitter_long,
     format_postgame_game,
@@ -30,6 +31,7 @@ logger = logging.getLogger("scripts.scheduler")
 PRE_MATCH_OFFSET_S = 60 * 60
 CYCLE_INTERVAL_S = 60 * 60 * 6
 POLL_INTERVAL_S = 60 * 5
+DAILY_SUMMARY_DELAY_S = 60 * 60  # 1h após o último jogo
 
 
 def _state_path() -> Path:
@@ -44,7 +46,7 @@ def _load_state() -> dict[str, Any]:
             return json.loads(path.read_text(encoding="utf-8"))
         except Exception:  # noqa: BLE001
             pass
-    return {"posted_games": {}, "posted_series": []}
+    return {"posted_games": {}, "posted_series": [], "daily_summaries": []}
 
 
 def _save_state(state: dict[str, Any]) -> None:
@@ -397,6 +399,87 @@ def _run_cycle() -> None:
         active_match_ids.append(int(match["id"]))
 
     _monitor_active_matches(active_match_ids, state)
+
+    # Agenda resumo diário 1h após último jogo
+    if active_match_ids:
+        _schedule_daily_summary(active_match_ids, state)
+
+
+def _build_daily_summary(match_ids: list[int]) -> dict[str, Any] | None:
+    """
+    Coleta resultados do dia e monta o resumo.
+    Retorna None se não houver dados suficientes.
+    """
+    s = load_settings()
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    results = []
+    for mid in match_ids:
+        pred_path = s.abs_data_dir() / "predictions" / f"pandascore_match_{mid}.json"
+        if not pred_path.exists():
+            continue
+        try:
+            pred = json.loads(pred_path.read_text(encoding="utf-8"))
+            if pred.get("prediction_correct") is None:
+                continue
+            results.append({
+                "match_id": mid,
+                "predicted_winner": pred.get("predicted_winner"),
+                "actual_winner": pred.get("actual_winner"),
+                "prediction_correct": pred.get("prediction_correct"),
+                "confidence": pred.get("confidence"),
+                "league_name": pred.get("league_name"),
+            })
+        except Exception:  # noqa: BLE001
+            pass
+
+    if not results:
+        return None
+
+    total = len(results)
+    acertos = sum(1 for r in results if r.get("prediction_correct"))
+    erros = total - acertos
+
+    return {
+        "date": today,
+        "total": total,
+        "acertos": acertos,
+        "erros": erros,
+        "results": results,
+    }
+
+
+def _schedule_daily_summary(match_ids: list[int], state: dict[str, Any]) -> None:
+    """
+    Aguarda 1h após o fim dos jogos e posta o resumo do dia.
+    Só posta se ainda não tiver postado hoje.
+    """
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    daily_summaries: list[str] = state.setdefault("daily_summaries", [])
+
+    if today in daily_summaries:
+        logger.info("resumo diário já postado hoje (%s)", today)
+        return
+
+    logger.info("aguardando %dmin para postar resumo diário", DAILY_SUMMARY_DELAY_S // 60)
+    time.sleep(DAILY_SUMMARY_DELAY_S)
+
+    summary_data = _build_daily_summary(match_ids)
+    if not summary_data:
+        logger.info("resumo diário: sem resultados para postar")
+        return
+
+    tw = format_daily_summary(summary_data)
+    th = format_daily_summary(summary_data)
+
+    if tw:
+        _post_both(tw, th, "resumo diário")
+        daily_summaries.append(today)
+        _save_state(state)
+        logger.info(
+            "resumo diário postado: %d acertos / %d jogos",
+            summary_data["acertos"], summary_data["total"],
+        )
 
 
 def main() -> int:
