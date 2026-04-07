@@ -347,3 +347,33 @@ def format_split_opener(opener_data: dict) -> str:
 
     result = "\n".join(lines)
     return result[:TWITTER_LIMIT]
+
+
+def format_weekly_ranking(ranking_data: dict) -> str:
+    """
+    Post de ranking semanal — top 5 times em melhor forma.
+    """
+    ranking = ranking_data.get("ranking", [])
+    headline = ranking_data.get("headline", "Times em melhor forma esta semana")
+    tags = _hashtags()
+
+    medals = {1: "🥇", 2: "🥈", 3: "🥉", 4: "4️⃣", 5: "5️⃣"}
+
+    lines = [
+        "📈 Ranking da Semana — Cenário BR",
+        "",
+        f"💬 {headline}",
+        "",
+    ]
+
+    for r in ranking[:5]:
+        pos = r.get("position", "?")
+        team = _abbreviate(r.get("team", "?"))
+        reason = r.get("reason", "")
+        medal = medals.get(pos, "•")
+        lines.append(f"{medal} {team} — {reason}")
+
+    lines += ["", tags]
+
+    result = "\n".join(lines)
+    return result[:TWITTER_LIMIT]

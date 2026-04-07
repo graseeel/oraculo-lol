@@ -245,3 +245,69 @@ Responda EXCLUSIVAMENTE em JSON válido, sem markdown."""
     except Exception as exc:  # noqa: BLE001
         logger.warning("falha ao gerar favoritos do split err=%r", exc)
         return []
+
+
+def build_weekly_ranking_analysis(
+    *,
+    teams: list[str],
+    winrates: dict[str, dict],
+    bot_accuracy: dict[str, dict],
+    week_key: str,
+) -> dict[str, Any]:
+    """
+    Gera ranking semanal dos times via GPT.
+    Combina winrate recente e acurácia histórica do bot.
+    """
+    # Monta contexto de dados para o GPT
+    data_lines = []
+    for team in teams:
+        wr = winrates.get(team)
+        acc = bot_accuracy.get(team)
+        parts = [f"- {_abbreviate(team)}:"]
+        if wr and wr.get("total", 0) > 0:
+            parts.append(f"forma recente {wr['wins']}V {wr['losses']}D ({wr['winrate']*100:.0f}%)")
+        if acc and acc.get("total", 0) > 0:
+            parts.append(f"Oráculo: {acc['correct']}/{acc['total']} previsões certas")
+        data_lines.append(" ".join(parts))
+
+    data_text = "\n".join(data_lines) if data_lines else "Sem dados disponíveis."
+
+    prompt = f"""Ranking semanal do cenário BR — {week_key}
+
+Dados dos times:
+{data_text}
+
+Gere um JSON com o ranking dos 5 times em melhor momento:
+{{
+  "ranking": [
+    {{"position": 1, "team": "<nome abreviado>", "reason": "<motivo em até 70 chars>"}},
+    {{"position": 2, "team": "<nome abreviado>", "reason": "<motivo em até 70 chars>"}},
+    {{"position": 3, "team": "<nome abreviado>", "reason": "<motivo em até 70 chars>"}},
+    {{"position": 4, "team": "<nome abreviado>", "reason": "<motivo em até 70 chars>"}},
+    {{"position": 5, "team": "<nome abreviado>", "reason": "<motivo em até 70 chars>"}}
+  ],
+  "headline": "<frase de destaque da semana em até 80 chars>"
+}}
+
+Use nomes abreviados: Furia, Loud, Fluxo, Red Canids, LOS, Vivo Keyd, Pain Gaming, Leviatan.
+Responda EXCLUSIVAMENTE em JSON válido, sem markdown."""
+
+    try:
+        client = from_env()
+        raw = client.chat(system=POSTGAME_SYSTEM, user=prompt, max_tokens=400)
+        cleaned = raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
+        return json.loads(cleaned)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("falha ao gerar ranking semanal err=%r", exc)
+        # Fallback: ranking básico por winrate sem GPT
+        sorted_teams = sorted(
+            [(t, winrates.get(t, {}).get("winrate", 0)) for t in teams],
+            key=lambda x: x[1], reverse=True,
+        )
+        return {
+            "ranking": [
+                {"position": i+1, "team": _abbreviate(t), "reason": f"{wr*100:.0f}% de aproveitamento"}
+                for i, (t, wr) in enumerate(sorted_teams[:5])
+            ],
+            "headline": "Times em melhor forma esta semana",
+        }

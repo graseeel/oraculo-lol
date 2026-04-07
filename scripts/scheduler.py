@@ -19,6 +19,7 @@ from oraculo_lol.publisher.formatter import (
     format_postgame_game,
     format_postgame_series,
     format_split_opener,
+    format_weekly_ranking,
 )
 from oraculo_lol.publisher.telegram import send_alert_safe
 from oraculo_lol.publisher.threads import post_thread_safe
@@ -350,6 +351,162 @@ def _monitor_active_matches(active_match_ids: list[int], state: dict[str, Any]) 
     logger.info("todos os matches monitorados finalizados")
 
 
+def _get_week_key() -> str:
+    """Retorna a chave da semana atual no formato YYYY-WNN."""
+    now = datetime.now(timezone.utc)
+    return f"{now.year}-W{now.isocalendar().week:02d}"
+
+
+def _build_team_winrates(teams: list[str]) -> dict[str, dict]:
+    """
+    Busca winrate recente de cada time via Pandascore.
+    Retorna dict {team_name: {wins, losses, winrate}}.
+    Fail-safe: times que falham são omitidos.
+    """
+    from oraculo_lol.datasources.pandascore import lol_team_past_matches, from_env as ps_from_env
+    from oraculo_lol.datasources.pandascore import BR_DEFAULT_LEAGUE_IDS
+
+    result = {}
+    try:
+        client = ps_from_env()
+        # Busca todos os times das ligas BR
+        all_teams = client.paginate(
+            "/lol/teams",
+            params={"filter[league_id]": ",".join(str(x) for x in BR_DEFAULT_LEAGUE_IDS)},
+            max_pages=2,
+        )
+        # Mapeia nome → id
+        name_to_id = {t.get("name", "").lower(): t.get("id") for t in all_teams if isinstance(t, dict)}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("falha ao buscar times para ranking err=%r", exc)
+        return result
+
+    for team_name in teams:
+        tid = name_to_id.get(team_name.lower())
+        if not tid:
+            continue
+        try:
+            matches = lol_team_past_matches(team_id=int(tid), last_n=10)
+            wins = losses = 0
+            for m in matches:
+                winner = m.get("winner")
+                if isinstance(winner, dict) and winner.get("id") == tid:
+                    wins += 1
+                elif m.get("status") == "finished":
+                    losses += 1
+            total = wins + losses
+            result[team_name] = {
+                "wins": wins,
+                "losses": losses,
+                "total": total,
+                "winrate": wins / total if total > 0 else 0.0,
+            }
+            time.sleep(1)  # rate limit
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("falha ao buscar winrate time=%s err=%r", team_name, exc)
+
+    return result
+
+
+def _build_bot_accuracy_by_team() -> dict[str, dict]:
+    """
+    Calcula acurácia do bot por time com base nas previsões salvas.
+    Retorna dict {team_name: {correct, total, accuracy}}.
+    """
+    s = load_settings()
+    pred_dir = s.abs_data_dir() / "predictions"
+    if not pred_dir.exists():
+        return {}
+
+    accuracy: dict[str, dict] = {}
+    for f in pred_dir.glob("*.json"):
+        try:
+            pred = json.loads(f.read_text(encoding="utf-8"))
+            if pred.get("prediction_correct") is None or pred.get("parse_error"):
+                continue
+            winner = pred.get("predicted_winner", "")
+            correct = pred.get("prediction_correct", False)
+            if not winner:
+                continue
+            if winner not in accuracy:
+                accuracy[winner] = {"correct": 0, "total": 0}
+            accuracy[winner]["total"] += 1
+            if correct:
+                accuracy[winner]["correct"] += 1
+        except Exception:  # noqa: BLE001
+            pass
+
+    for team, data in accuracy.items():
+        data["accuracy"] = data["correct"] / data["total"] if data["total"] > 0 else 0.0
+
+    return accuracy
+
+
+def _check_and_post_weekly_ranking(
+    scheduled: list[tuple[datetime, dict[str, Any]]],
+    state: dict[str, Any],
+) -> None:
+    """
+    Posta ranking semanal antes do primeiro jogo da semana.
+    Só posta uma vez por semana (controle por chave ISO).
+    """
+    if not scheduled:
+        return
+
+    week_key = _get_week_key()
+    posted_rankings: list[str] = state.setdefault("posted_rankings", [])
+
+    if week_key in posted_rankings:
+        logger.info("ranking semanal já postado esta semana (%s)", week_key)
+        return
+
+    # Verifica se há partida nesta semana na janela do ciclo
+    now = datetime.now(timezone.utc)
+    has_this_week = any(
+        begin_at.isocalendar()[:2] == now.isocalendar()[:2]
+        for begin_at, _ in scheduled
+    )
+    if not has_this_week:
+        return
+
+    try:
+        logger.info("gerando ranking semanal para %s", week_key)
+
+        # Extrai times únicos das partidas
+        teams: dict[int, str] = {}
+        for _, match in scheduled:
+            for opp in (match.get("opponents") or []):
+                o = opp.get("opponent") or {}
+                if o.get("id") and o.get("name"):
+                    teams[int(o["id"])] = o["name"]
+
+        team_names = list(teams.values())
+
+        # Busca dados
+        winrates = _build_team_winrates(team_names)
+        bot_accuracy = _build_bot_accuracy_by_team()
+
+        # Manda pro GPT gerar ranking
+        from oraculo_lol.oraculo.postgame_runner import build_weekly_ranking_analysis
+        ranking = build_weekly_ranking_analysis(
+            teams=team_names,
+            winrates=winrates,
+            bot_accuracy=bot_accuracy,
+            week_key=week_key,
+        )
+
+        tw = format_weekly_ranking(ranking)
+        th = format_weekly_ranking(ranking)
+        _post_both(tw, th, f"ranking semanal {week_key}")
+
+        posted_rankings.append(week_key)
+        _save_state(state)
+        logger.info("ranking semanal postado: %s", week_key)
+
+    except Exception as exc:  # noqa: BLE001
+        logger.error("falha no ranking semanal err=%r", exc)
+
+
 def _check_and_post_split_opener(
     scheduled: list[tuple[datetime, dict[str, Any]]],
     state: dict[str, Any],
@@ -446,6 +603,9 @@ def _run_cycle() -> None:
 
     # Detecta abertura de novo split
     _check_and_post_split_opener(scheduled, state)
+
+    # Ranking semanal antes do primeiro jogo da semana
+    _check_and_post_weekly_ranking(scheduled, state)
 
     for begin_at, match in scheduled:
         wait_s = _seconds_until_post(begin_at)
