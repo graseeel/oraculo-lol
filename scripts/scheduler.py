@@ -18,8 +18,10 @@ from oraculo_lol.publisher.formatter import (
     format_for_twitter_long,
     format_postgame_game,
     format_postgame_series,
+    format_pregame_poll,
     format_split_opener,
     format_streak,
+    format_streak_poll,
     format_weekly_ranking,
 )
 from oraculo_lol.publisher.telegram import send_alert_safe
@@ -75,10 +77,11 @@ def _seconds_until_post(begin_at: datetime) -> float:
     return max(0.0, post_at - now.timestamp())
 
 
-def _post_both(twitter_text: str, threads_text: str, match_name: str) -> tuple[bool, bool]:
-    tw_ok = post_tweet_safe(twitter_text)
+def _post_both(twitter_text: str, threads_text: str, match_name: str) -> tuple[str | None, bool]:
+    """Retorna (tweet_id, threads_ok). tweet_id é None se falhou."""
+    tweet_id = post_tweet_safe(twitter_text)
     th_ok = post_thread_safe(threads_text)
-    if not tw_ok:
+    if not tweet_id:
         send_alert_safe(
             f"⚠️ <b>Falha ao postar no X</b>\n\nPartida: {match_name}\n"
             "Possível causa: sessão do Chrome expirada.\n\n"
@@ -86,7 +89,7 @@ def _post_both(twitter_text: str, threads_text: str, match_name: str) -> tuple[b
         )
     if not th_ok:
         send_alert_safe(f"⚠️ <b>Falha ao postar no Threads</b>\n\nPartida: {match_name}")
-    return tw_ok, th_ok
+    return tweet_id, th_ok
 
 
 def _process_pregame(match: dict[str, Any]) -> None:
@@ -101,15 +104,31 @@ def _process_pregame(match: dict[str, Any]) -> None:
 
         tw = format_for_twitter_long(prediction)
         th = format_for_threads(prediction)
-        tw_ok, th_ok = _post_both(tw, th, name)
+        tweet_id, th_ok = _post_both(tw, th, name)
 
-        if tw_ok and th_ok:
+        # Posta enquete como reply no tweet de análise
+        if prediction.predicted_winner and len(prediction.teams) == 2:
+            try:
+                teams = prediction.teams
+                poll_text = format_pregame_poll(
+                    team_a=teams[0].name or "",
+                    team_b=teams[1].name or "",
+                    predicted_winner=prediction.predicted_winner,
+                    win_prob=teams[0].win_probability if prediction.predicted_winner == teams[0].name else teams[1].win_probability,
+                )
+                time.sleep(3)
+                poll_tweet_id = post_tweet_safe(poll_text, reply_to_id=tweet_id)
+                logger.info("enquete pré-jogo postada reply_to=%s id=%s", tweet_id, poll_tweet_id)
+            except Exception as exc_poll:  # noqa: BLE001
+                logger.warning("falha ao postar enquete pré-jogo err=%r", exc_poll)
+
+        if tweet_id and th_ok:
             send_alert_safe(
                 f"✅ <b>Pré-jogo postado</b>\n\nPartida: {name}\n"
                 f"Favorito: {prediction.predicted_winner} ({prediction.confidence})"
             )
         logger.info("pré-jogo match_id=%s — X:%s Threads:%s",
-                    match_id, "✓" if tw_ok else "✗", "✓" if th_ok else "✗")
+                    match_id, "✓" if tweet_id else "✗", "✓" if th_ok else "✗")
 
     except Exception as exc:  # noqa: BLE001
         logger.error("falha no pré-jogo match_id=%s err=%r", match_id, exc)
@@ -502,7 +521,16 @@ def _check_and_post_streak(state: dict[str, Any]) -> None:
     try:
         tw = format_streak(streak, teams)
         th = format_streak(streak, teams)
-        _post_both(tw, th, f"streak {streak}")
+        streak_tweet_id, _ = _post_both(tw, th, f"streak {streak}")
+
+        # Enquete de streak como reply
+        try:
+            poll_text = format_streak_poll(streak)
+            time.sleep(3)
+            post_tweet_safe(poll_text, reply_to_id=streak_tweet_id)
+            logger.info("enquete de streak postada reply_to=%s", streak_tweet_id)
+        except Exception as exc_poll:  # noqa: BLE001
+            logger.warning("falha ao postar enquete streak err=%r", exc_poll)
 
         state["last_streak_posted"] = streak
         _save_state(state)

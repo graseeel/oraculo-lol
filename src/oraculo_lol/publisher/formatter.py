@@ -414,3 +414,59 @@ def format_streak(streak: int, teams: list[str]) -> str:
 
     result = "\n".join(lines)
     return result[:THREADS_LIMIT]
+
+
+def format_pregame_poll(
+    team_a: str,
+    team_b: str,
+    predicted_winner: str | None = None,
+    win_prob: float | None = None,
+) -> str:
+    """
+    Enquete de pré-jogo — postada como reply no tweet de análise.
+    """
+    a = _abbreviate(team_a)
+    b = _abbreviate(team_b)
+    tags = _hashtags()
+
+    # Labels divertidos baseados nos times
+    label_a = f"🔥 {a} vai stomp"
+    label_b = f"😤 {b} surpreende"
+
+    pred_line = ""
+    if predicted_winner and win_prob is not None:
+        winner = _abbreviate(predicted_winner)
+        prob = f"{win_prob * 100:.0f}%"
+        pred_line = f"\nO Oráculo prevê: {winner} ({prob}) — vote e descubra depois! 🔮"
+
+    lines = [
+        f"⚔️ {a} vs {b} — quem leva hoje?",
+        "",
+        f"❤️ = {label_a}",
+        f"🔁 = {label_b}",
+        pred_line,
+        "",
+        tags,
+    ]
+
+    result = "\n".join(l for l in lines if l is not None)
+    return result[:THREADS_LIMIT]
+
+
+def format_streak_poll(streak: int) -> str:
+    """
+    Enquete de sequência — postada como reply no tweet de streak.
+    """
+    tags = _hashtags()
+
+    lines = [
+        f"🔮 {streak} acertos seguidos... será que continua?",
+        "",
+        "❤️ = 🧠 Oráculo é infalível",
+        "🔁 = 💀 Vai errar em breve",
+        "💬 = 🤔 Depende do meta",
+        "",
+        tags,
+    ]
+
+    return "\n".join(lines)[:THREADS_LIMIT]

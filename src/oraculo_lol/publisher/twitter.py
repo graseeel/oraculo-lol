@@ -34,7 +34,6 @@ def _build_oauth_header(
     access_token: str,
     access_token_secret: str,
 ) -> str:
-    """Gera o header Authorization OAuth 1.0a para a X API v2."""
     oauth_params = {
         "oauth_consumer_key": api_key,
         "oauth_nonce": uuid.uuid4().hex,
@@ -79,10 +78,10 @@ class TwitterClient:
     access_token_secret: str
     timeout_s: float = 15.0
 
-    def post_tweet(self, text: str) -> str:
+    def post_tweet(self, text: str, *, reply_to_id: str | None = None) -> str:
         """
         Posta um tweet via API v2. Retorna o tweet_id.
-        Levanta TwitterError em caso de falha — incluindo 402 (plano pago necessário).
+        Se reply_to_id for fornecido, posta como reply.
         """
         auth_header = _build_oauth_header(
             method="POST",
@@ -98,9 +97,13 @@ class TwitterClient:
             "Content-Type": "application/json",
         }
 
+        body: dict = {"text": text}
+        if reply_to_id:
+            body["reply"] = {"in_reply_to_tweet_id": reply_to_id}
+
         try:
             with httpx.Client(timeout=self.timeout_s) as client:
-                resp = client.post(TWEET_URL, json={"text": text}, headers=headers)
+                resp = client.post(TWEET_URL, json=body, headers=headers)
 
             if resp.status_code == 429:
                 raise TwitterError("X rate limit atingido (429)")
@@ -142,31 +145,31 @@ def from_env() -> TwitterClient:
     )
 
 
-def post_tweet_safe(text: str) -> bool:
+def post_tweet_safe(text: str, *, reply_to_id: str | None = None) -> str | None:
     """
-    Wrapper fail-safe com fallback automático:
-    1. Tenta API v2 (se credenciais configuradas)
-    2. Se falhar com 402 (plano pago) → tenta browser via Playwright
-    3. Qualquer outro erro → loga e retorna False
+    Wrapper fail-safe com fallback automático.
+    Retorna o tweet_id (str) se postou, None se falhou.
 
-    Nunca levanta exceção — ideal para uso no scheduler.
+    1. Tenta API v2
+    2. Se 402 → fallback via browser
+    3. Qualquer outro erro → loga e retorna None
     """
     # Tentativa 1: API
     try:
         client = from_env()
-        client.post_tweet(text)
-        return True
+        tweet_id = client.post_tweet(text, reply_to_id=reply_to_id)
+        return tweet_id
     except TwitterError as exc:
         msg = str(exc)
         if "402" in msg or "plano pago" in msg:
             logger.info("API X requer plano pago — tentando fallback via browser")
         else:
             logger.warning("falha na API X: %s", exc)
-            return False
+            return None
     except Exception as exc:  # noqa: BLE001
         logger.warning("erro inesperado na API X: %r", exc)
-        return False
+        return None
 
     # Tentativa 2: Browser fallback
     from .twitter_browser import post_tweet_browser  # noqa: PLC0415
-    return post_tweet_browser(text)
+    return post_tweet_browser(text, reply_to_id=reply_to_id)
