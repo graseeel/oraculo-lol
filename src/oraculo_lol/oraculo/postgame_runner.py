@@ -311,3 +311,53 @@ Responda EXCLUSIVAMENTE em JSON válido, sem markdown."""
             ],
             "headline": "Times em melhor forma esta semana",
         }
+
+
+def build_weekly_error_analysis(errors: list[dict]) -> dict:
+    """
+    Analisa os erros da semana via GPT e identifica padrões.
+    Retorna dict com pattern (padrão identificado) e advice (conselho).
+    """
+    if not errors:
+        return {"pattern": None, "advice": None}
+
+    error_lines = []
+    for e in errors:
+        matchup = e.get("matchup", "?")
+        predicted = e.get("predicted", "?")
+        actual = e.get("actual", "?")
+        conf = e.get("confidence", "?")
+        error_lines.append(f"- {matchup}: previsto {predicted} ({conf}) → venceu {actual}")
+
+    errors_text = "\n".join(error_lines)
+
+    prompt = f"""Análise de erros de previsão — cenário BR de LoL
+
+Erros desta semana:
+{errors_text}
+
+Analise esses erros e identifique:
+1. Um padrão comum (ex: subestimei underdogs com picks agressivos)
+2. Um conselho para melhorar as próximas previsões
+
+Responda em JSON:
+{{
+  "pattern": "<padrão identificado em até 120 chars>",
+  "advice": "<conselho de melhoria em até 100 chars>",
+  "public_summary": "<versão resumida e divertida para postar no X em até 140 chars>"
+}}
+
+Responda EXCLUSIVAMENTE em JSON válido, sem markdown."""
+
+    try:
+        client = from_env()
+        raw = client.chat(system=POSTGAME_SYSTEM, user=prompt, max_tokens=300)
+        cleaned = raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
+        return json.loads(cleaned)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("falha ao gerar análise de erros err=%r", exc)
+        return {
+            "pattern": f"{len(errors)} erros esta semana — padrão não identificado",
+            "advice": "Continuar monitorando para identificar tendências",
+            "public_summary": f"Errei {len(errors)} previsões essa semana. Ajustando o radar! 👀",
+        }

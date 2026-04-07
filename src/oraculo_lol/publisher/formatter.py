@@ -527,3 +527,35 @@ def format_postgame_series_quote(
 
     result = "\n".join(parts)
     return result[:TWITTER_LIMIT]
+
+
+def format_weekly_error_post(
+    errors: list[dict],
+    analysis: dict,
+) -> str:
+    """
+    Post público semanal de análise de erros — divertido e transparente.
+    """
+    tags = _hashtags()
+    n = len(errors)
+    public_summary = analysis.get("public_summary", "")
+
+    if n == 0:
+        lines = [
+            "🎯 Semana perfeita — zero erros!",
+            "",
+            "O Oráculo está afiado. Será que continua? 👀",
+            "",
+            tags,
+        ]
+        return "\n".join(lines)[:TWITTER_LIMIT]
+
+    lines = [
+        f"🔍 Errei {n} {'previsão' if n == 1 else 'previsões'} essa semana.",
+        "",
+        public_summary,
+        "",
+        tags,
+    ]
+
+    return "\n".join(lines)[:TWITTER_LIMIT]

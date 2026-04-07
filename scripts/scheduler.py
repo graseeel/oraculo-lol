@@ -23,6 +23,7 @@ from oraculo_lol.publisher.formatter import (
     format_split_opener,
     format_streak,
     format_streak_poll,
+    format_weekly_error_post,
     format_weekly_ranking,
 )
 from oraculo_lol.publisher.telegram import send_alert_safe
@@ -548,6 +549,115 @@ def _check_and_post_streak(state: dict[str, Any]) -> None:
         logger.error("falha ao postar streak err=%r", exc)
 
 
+def _collect_weekly_errors(week_key: str) -> list[dict]:
+    """
+    Coleta erros de previsão da semana anterior.
+    week_key formato: "2026-W15"
+    """
+    s = load_settings()
+    pred_dir = s.abs_data_dir() / "predictions"
+    if not pred_dir.exists():
+        return []
+
+    # Calcula datas da semana anterior
+    import datetime as dt
+    year, week = int(week_key.split("-W")[0]), int(week_key.split("-W")[1])
+    # Semana anterior
+    week_start = dt.datetime.fromisocalendar(year, week, 1).replace(tzinfo=timezone.utc)
+    week_end = dt.datetime.fromisocalendar(year, week, 7).replace(
+        hour=23, minute=59, second=59, tzinfo=timezone.utc
+    )
+
+    errors = []
+    for f in pred_dir.glob("*.json"):
+        try:
+            p = json.loads(f.read_text(encoding="utf-8"))
+            if p.get("prediction_correct") is not False or p.get("parse_error"):
+                continue
+            created = _parse_dt(p.get("created_at"))
+            if not created or not (week_start <= created <= week_end):
+                continue
+            teams = p.get("teams", [])
+            matchup = " vs ".join(t.get("name", "?") for t in teams) if teams else "?"
+            errors.append({
+                "matchup": matchup,
+                "predicted": p.get("predicted_winner", "?"),
+                "actual": p.get("actual_winner", "?"),
+                "confidence": p.get("confidence", "?"),
+            })
+        except Exception:  # noqa: BLE001
+            pass
+
+    return errors
+
+
+def _check_and_post_weekly_error_analysis(state: dict[str, Any]) -> None:
+    """
+    Toda segunda-feira, analisa os erros da semana anterior e posta.
+    Só posta uma vez por semana.
+    """
+    now = datetime.now(timezone.utc)
+    # Só roda na segunda-feira
+    if now.weekday() != 0:
+        return
+
+    # Semana anterior
+    prev_week_num = now.isocalendar().week - 1
+    prev_year = now.year
+    if prev_week_num == 0:
+        prev_week_num = 52
+        prev_year -= 1
+    prev_week_key = f"{prev_year}-W{prev_week_num:02d}"
+
+    analyzed_weeks: list[str] = state.setdefault("analyzed_weeks", [])
+    if prev_week_key in analyzed_weeks:
+        return
+
+    try:
+        errors = _collect_weekly_errors(prev_week_key)
+
+        if not errors:
+            # Semana perfeita — só telegram
+            send_alert_safe(
+                f"🎯 <b>Semana perfeita!</b> ({prev_week_key})\n\nZero erros na semana. 🔥"
+            )
+            analyzed_weeks.append(prev_week_key)
+            _save_state(state)
+            return
+
+        # Análise via GPT
+        from oraculo_lol.oraculo.postgame_runner import build_weekly_error_analysis
+        analysis = build_weekly_error_analysis(errors)
+
+        # Telegram — análise técnica detalhada
+        error_lines = "\n".join(
+            f"• {e['matchup']}: previsto {e['predicted']} ({e['confidence']}) → venceu {e['actual']}"
+            for e in errors
+        )
+        pattern = analysis.get("pattern", "Padrão não identificado")
+        advice = analysis.get("advice", "")
+
+        send_alert_safe(
+            f"📊 <b>Análise semanal de erros</b> ({prev_week_key})\n\n"
+            f"{len(errors)} {'erro' if len(errors) == 1 else 'erros'} esta semana:\n"
+            f"{error_lines}\n\n"
+            f"🔍 <b>Padrão:</b> {pattern}\n\n"
+            f"💡 <b>Conselho:</b> {advice}"
+        )
+
+        # X — versão pública divertida
+        tw = format_weekly_error_post(errors, analysis)
+        th = format_weekly_error_post(errors, analysis)
+        _post_both(tw, th, f"análise erros {prev_week_key}")
+
+        analyzed_weeks.append(prev_week_key)
+        _save_state(state)
+        logger.info("análise semanal de erros postada: %s (%d erros)", prev_week_key, len(errors))
+
+    except Exception as exc:  # noqa: BLE001
+        logger.error("falha na análise semanal de erros err=%r", exc)
+
+
 def _check_and_post_weekly_ranking(
     scheduled: list[tuple[datetime, dict[str, Any]]],
     state: dict[str, Any],
@@ -709,6 +819,9 @@ def _run_cycle() -> None:
 
     # Detecta abertura de novo split
     _check_and_post_split_opener(scheduled, state)
+
+    # Análise semanal de erros (toda segunda)
+    _check_and_post_weekly_error_analysis(state)
 
     # Ranking semanal antes do primeiro jogo da semana
     _check_and_post_weekly_ranking(scheduled, state)
