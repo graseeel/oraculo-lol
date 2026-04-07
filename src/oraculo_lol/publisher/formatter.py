@@ -305,3 +305,45 @@ def format_daily_summary(summary: dict) -> str:
 
     result = "\n".join(lines)
     return result[:THREADS_LIMIT]
+
+
+def format_split_opener(opener_data: dict) -> str:
+    """
+    Post de abertura de split — posta no primeiro dia de jogos.
+    Apresenta os times e os favoritos do Oráculo.
+    """
+    league = opener_data.get("league_name", "?")
+    serie = opener_data.get("serie_name", "?")
+    teams = opener_data.get("teams", [])
+    favorites = opener_data.get("favorites", [])
+    tags = _hashtags()
+
+    # Times abreviados
+    teams_abbr = [_abbreviate(t) for t in teams]
+    teams_line = ", ".join(teams_abbr)
+
+    lines = [
+        f"⚔️ {league} {serie} — começa hoje!",
+        "",
+        f"Times: {teams_line}",
+        "",
+    ]
+
+    if favorites:
+        lines.append("🔮 Favoritos do Oráculo:")
+        for f in favorites[:3]:
+            pos = f.get("position", "?")
+            team = _abbreviate(f.get("team", "?"))
+            reason = f.get("reason", "")
+            medal = {1: "🥇", 2: "🥈", 3: "🥉"}.get(pos, "•")
+            lines.append(f"{medal} {team} — {reason}")
+        lines.append("")
+
+    lines += [
+        "Que o split comece! 🎮",
+        "",
+        tags,
+    ]
+
+    result = "\n".join(lines)
+    return result[:TWITTER_LIMIT]

@@ -202,3 +202,46 @@ def build_postgame(
         confidence=confidence,
         prediction_correct=prediction_correct,
     )
+
+
+def build_split_opener_analysis(opener_data: dict[str, Any]) -> str:
+    """
+    Gera análise de favoritos para abertura de split via GPT.
+    Usa os dados das partidas do primeiro dia como contexto.
+    """
+    league = opener_data.get("league_name", "?")
+    serie = opener_data.get("serie_name", "?")
+    teams = opener_data.get("teams", [])
+    teams_list = ", ".join(teams) if teams else "?"
+
+    prompt = f"""Abertura do {league} — {serie}
+
+Times participantes: {teams_list}
+
+Com base no que você sabe sobre esses times e o cenário BR de LoL,
+gere um JSON com os 3 favoritos para vencer o split:
+
+{{
+  "favorites": [
+    {{"position": 1, "team": "<time>", "reason": "<motivo em até 60 chars>"}},
+    {{"position": 2, "team": "<time>", "reason": "<motivo em até 60 chars>"}},
+    {{"position": 3, "team": "<time>", "reason": "<motivo em até 60 chars>"}}
+  ]
+}}
+
+Use nomes abreviados: Furia, Loud, Fluxo, Red Canids, LOS, Vivo Keyd, Pain Gaming, Leviatan.
+Responda EXCLUSIVAMENTE em JSON válido, sem markdown."""
+
+    try:
+        client = from_env()
+        raw = client.chat(
+            system=POSTGAME_SYSTEM,
+            user=prompt,
+            max_tokens=300,
+        )
+        cleaned = raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
+        data = json.loads(cleaned)
+        return data.get("favorites", [])
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("falha ao gerar favoritos do split err=%r", exc)
+        return []

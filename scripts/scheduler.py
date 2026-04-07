@@ -18,6 +18,7 @@ from oraculo_lol.publisher.formatter import (
     format_for_twitter_long,
     format_postgame_game,
     format_postgame_series,
+    format_split_opener,
 )
 from oraculo_lol.publisher.telegram import send_alert_safe
 from oraculo_lol.publisher.threads import post_thread_safe
@@ -349,6 +350,71 @@ def _monitor_active_matches(active_match_ids: list[int], state: dict[str, Any]) 
     logger.info("todos os matches monitorados finalizados")
 
 
+def _check_and_post_split_opener(
+    scheduled: list[tuple[datetime, dict[str, Any]]],
+    state: dict[str, Any],
+) -> None:
+    """
+    Detecta se há partidas de um split novo (serie_id nunca visto).
+    Se sim, gera e posta o post de abertura antes dos jogos.
+    """
+    posted_splits: list[str] = state.setdefault("posted_splits", [])
+
+    # Coleta todos os serie_ids das partidas do ciclo
+    new_splits: dict[str, dict[str, Any]] = {}
+    for _, match in scheduled:
+        serie = match.get("serie") or {}
+        serie_id = str(serie.get("id", ""))
+        if not serie_id or serie_id in posted_splits:
+            continue
+        if serie_id not in new_splits:
+            new_splits[serie_id] = {
+                "serie_id": serie_id,
+                "serie_name": serie.get("full_name") or serie.get("season") or "?",
+                "league_name": (match.get("league") or {}).get("name", "?"),
+                "matches": [],
+            }
+        new_splits[serie_id]["matches"].append(match)
+
+    for serie_id, split_data in new_splits.items():
+        try:
+            logger.info(
+                "novo split detectado: %s %s (serie_id=%s)",
+                split_data["league_name"], split_data["serie_name"], serie_id,
+            )
+            # Extrai times únicos das partidas
+            teams: dict[int, str] = {}
+            for m in split_data["matches"]:
+                for opp in (m.get("opponents") or []):
+                    o = opp.get("opponent") or {}
+                    if o.get("id") and o.get("name"):
+                        teams[int(o["id"])] = o["name"]
+
+            # Monta dados para o post
+            opener_data = {
+                "league_name": split_data["league_name"],
+                "serie_name": split_data["serie_name"],
+                "teams": list(teams.values()),
+                "matches": split_data["matches"],
+            }
+
+            # Gera análise de favoritos via GPT
+            from oraculo_lol.oraculo.postgame_runner import build_split_opener_analysis
+            favorites = build_split_opener_analysis(opener_data)
+            opener_data["favorites"] = favorites
+
+            tw = format_split_opener(opener_data)
+            th = format_split_opener(opener_data)
+            _post_both(tw, th, f"abertura {split_data['league_name']}")
+
+            posted_splits.append(serie_id)
+            _save_state(state)
+            logger.info("abertura de split postada: %s %s", split_data["league_name"], split_data["serie_name"])
+
+        except Exception as exc:  # noqa: BLE001
+            logger.error("falha na abertura do split serie_id=%s err=%r", serie_id, exc)
+
+
 def _run_cycle() -> None:
     logger.info("iniciando ciclo de busca de partidas BR")
     check_threads_token()
@@ -377,6 +443,9 @@ def _run_cycle() -> None:
 
     state = _load_state()
     active_match_ids: list[int] = []
+
+    # Detecta abertura de novo split
+    _check_and_post_split_opener(scheduled, state)
 
     for begin_at, match in scheduled:
         wait_s = _seconds_until_post(begin_at)
