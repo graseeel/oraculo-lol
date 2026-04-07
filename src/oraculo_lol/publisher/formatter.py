@@ -470,3 +470,60 @@ def format_streak_poll(streak: int) -> str:
     ]
 
     return "\n".join(lines)[:THREADS_LIMIT]
+
+
+def format_postgame_series_quote(
+    postgame: MatchPostGame,
+    *,
+    poll_tweet_id: str | None = None,
+) -> str:
+    """
+    Resultado final com quote da enquete.
+    Se poll_tweet_id disponível, adiciona URL do tweet da enquete
+    para o X renderizar como quote card automaticamente.
+    """
+    from ..settings import load_settings
+
+    a = _abbreviate(postgame.team_a_name)
+    b = _abbreviate(postgame.team_b_name)
+    winner = _abbreviate(
+        postgame.team_a_name if postgame.score_a > postgame.score_b else postgame.team_b_name
+    )
+
+    header = f"🏆 {winner} vence! {a} {postgame.score_a}×{postgame.score_b} {b}"
+
+    prediction_line = ""
+    if postgame.predicted_winner is not None:
+        predicted = _abbreviate(postgame.predicted_winner)
+        if postgame.prediction_correct:
+            prediction_line = f"✅ Oráculo acertou — favorito {predicted} confirmado"
+        else:
+            prediction_line = f"❌ Oráculo errou — havia previsto {predicted}"
+
+    summary = postgame.series_summary or ""
+    tags = _hashtags()
+
+    # Linha de call para a enquete
+    poll_line = ""
+    if poll_tweet_id and poll_tweet_id != "ok":
+        try:
+            s = load_settings()
+            username = s.twitter_username or "oraculodolol"
+            poll_url = f"https://x.com/{username}/status/{poll_tweet_id}"
+            poll_line = f"\nE a enquete? Vocês acertaram? 👀\n\n{poll_url}"
+        except Exception:  # noqa: BLE001
+            pass
+
+    parts = [header]
+    if prediction_line:
+        parts.append(prediction_line)
+    if summary:
+        parts.append("")
+        parts.append(summary)
+    if poll_line:
+        parts.append(poll_line)
+    parts.append("")
+    parts.append(tags)
+
+    result = "\n".join(parts)
+    return result[:TWITTER_LIMIT]

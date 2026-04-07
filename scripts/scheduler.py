@@ -18,6 +18,7 @@ from oraculo_lol.publisher.formatter import (
     format_for_twitter_long,
     format_postgame_game,
     format_postgame_series,
+    format_postgame_series_quote,
     format_pregame_poll,
     format_split_opener,
     format_streak,
@@ -119,6 +120,11 @@ def _process_pregame(match: dict[str, Any]) -> None:
                 time.sleep(3)
                 poll_tweet_id = post_tweet_safe(poll_text, reply_to_id=tweet_id)
                 logger.info("enquete pré-jogo postada reply_to=%s id=%s", tweet_id, poll_tweet_id)
+                # Salva poll_tweet_id no estado para usar no quote do resultado
+                if poll_tweet_id and poll_tweet_id != "ok":
+                    state = _load_state()
+                    state.setdefault("poll_tweet_ids", {})[str(match_id)] = poll_tweet_id
+                    _save_state(state)
             except Exception as exc_poll:  # noqa: BLE001
                 logger.warning("falha ao postar enquete pré-jogo err=%r", exc_poll)
 
@@ -219,7 +225,9 @@ def _process_postgame(match: dict[str, Any], state: dict[str, Any]) -> None:
             postgame = build_postgame(match, finished_games)
             postgame.series_summary = run_postgame_analysis(postgame, mode="series")
 
-            tw = format_postgame_series(postgame)
+            # Verifica se tem poll_tweet_id para fazer quote
+            poll_tweet_id = state.get("poll_tweet_ids", {}).get(match_id)
+            tw = format_postgame_series_quote(postgame, poll_tweet_id=poll_tweet_id)
             th = format_postgame_series(postgame)
             _post_both(tw, th, name)
 
