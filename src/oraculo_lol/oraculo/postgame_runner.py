@@ -233,7 +233,7 @@ Use nomes abreviados: Furia, Loud, Fluxo, Red Canids, LOS, Vivo Keyd, Pain Gamin
 Responda EXCLUSIVAMENTE em JSON válido, sem markdown."""
 
     try:
-        client = from_env()
+        client = llm_from_env()
         raw = client.chat(
             system=POSTGAME_SYSTEM,
             user=prompt,
@@ -289,11 +289,13 @@ Gere um JSON com o ranking dos 5 times em melhor momento:
   "headline": "<frase de destaque da semana em até 80 chars>"
 }}
 
-Use nomes abreviados: Furia, Loud, Fluxo, Red Canids, LOS, Vivo Keyd, Pain Gaming, Leviatan.
+CRÍTICO: use EXATAMENTE estes nomes, sem abreviar mais:
+Furia, Loud, Fluxo, Red Canids, LOS, Vivo Keyd, Pain Gaming, Leviatan, KaBuM!, Estral Esports, RMD Gaming, INTZ, Team Solid, Ei Nerd Esports, 7Rex Team, Pain Academy, Red Academy, Vivo Academy.
+Não invente siglas como FUR, FLX, RED — use o nome completo da lista acima.
 Responda EXCLUSIVAMENTE em JSON válido, sem markdown."""
 
     try:
-        client = from_env()
+        client = llm_from_env()
         raw = client.chat(system=POSTGAME_SYSTEM, user=prompt, max_tokens=400)
         cleaned = raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
         return json.loads(cleaned)
@@ -350,7 +352,7 @@ Responda em JSON:
 Responda EXCLUSIVAMENTE em JSON válido, sem markdown."""
 
     try:
-        client = from_env()
+        client = llm_from_env()
         raw = client.chat(system=POSTGAME_SYSTEM, user=prompt, max_tokens=300)
         cleaned = raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
         return json.loads(cleaned)
