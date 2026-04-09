@@ -53,7 +53,7 @@ def _load_state() -> dict[str, Any]:
             return json.loads(path.read_text(encoding="utf-8"))
         except Exception:  # noqa: BLE001
             pass
-    return {"posted_games": {}, "posted_series": [], "daily_summaries": []}
+    return {"posted_games": {}, "posted_series": [], "daily_summaries": [], "active_match_ids": []}
 
 
 def _save_state(state: dict[str, Any]) -> None:
@@ -216,8 +216,19 @@ def _process_postgame(match: dict[str, Any], state: dict[str, Any]) -> None:
             _save_state(state)
             logger.info("pós-jogo game_id=%s match=%s postado", game_id, name)
 
+            winner = postgame.games[-1].winner_name or "?"
+            send_alert_safe(
+                f"🎮 <b>Jogo {postgame.games[-1].position} postado</b>\n\n"
+                f"Partida: {name}\n"
+                f"Vencedor: {winner} em {postgame.games[-1].length_minutes}\n"
+                f"Série: {postgame.score_a}×{postgame.score_b}"
+            )
+
         except Exception as exc:  # noqa: BLE001
             logger.error("falha no pós-jogo game_id=%s err=%r", game_id, exc)
+            send_alert_safe(
+                f"⚠️ <b>Falha no pós-jogo</b>\n\nPartida: {name}\nErro: <code>{str(exc)[:150]}</code>"
+            )
 
     # Post de resultado final
     if match.get("status") == "finished" and match_id not in posted_series:
@@ -243,11 +254,24 @@ def _process_postgame(match: dict[str, Any], state: dict[str, Any]) -> None:
             _save_state(state)
             logger.info("resultado final match=%s postado", name)
 
+            acerto = postgame.prediction_correct
+            status = "✅ Acertou" if acerto is True else ("❌ Errou" if acerto is False else "—")
+            winner_final = postgame.team_a_name if postgame.score_a > postgame.score_b else postgame.team_b_name
+            send_alert_safe(
+                f"🏆 <b>Resultado final postado</b>\n\n"
+                f"Partida: {name}\n"
+                f"Vencedor: {winner_final} ({postgame.score_a}×{postgame.score_b})\n"
+                f"Previsão: {status}"
+            )
+
             # Verifica sequência de acertos
             _check_and_post_streak(state)
 
         except Exception as exc:  # noqa: BLE001
             logger.error("falha no resultado final match=%s err=%r", name, exc)
+            send_alert_safe(
+                f"⚠️ <b>Falha no resultado final</b>\n\nPartida: {name}\nErro: <code>{str(exc)[:150]}</code>"
+            )
 
 
 def _try_postgame_from_liquipedia(match_id: int, state: dict[str, Any]) -> None:
@@ -815,7 +839,14 @@ def _run_cycle() -> None:
     scheduled.sort(key=lambda x: x[0])
 
     state = _load_state()
-    active_match_ids: list[int] = []
+
+    # Restaura jogos em andamento que foram perdidos por reinício
+    active_match_ids: list[int] = list(state.get("active_match_ids", []))
+    if active_match_ids:
+        logger.info(
+            "restaurando %d partidas em andamento do estado anterior",
+            len(active_match_ids),
+        )
 
     # Detecta abertura de novo split
     _check_and_post_split_opener(scheduled, state)
@@ -844,9 +875,17 @@ def _run_cycle() -> None:
             time.sleep(wait_s)
 
         _process_pregame(match)
-        active_match_ids.append(int(match["id"]))
+        mid = int(match["id"])
+        if mid not in active_match_ids:
+            active_match_ids.append(mid)
+        state["active_match_ids"] = active_match_ids
+        _save_state(state)
 
     _monitor_active_matches(active_match_ids, state)
+
+    # Limpa lista de partidas ativas após monitoramento
+    state["active_match_ids"] = []
+    _save_state(state)
 
     # Agenda resumo diário 1h após último jogo
     if active_match_ids:
